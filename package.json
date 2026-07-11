@@ -1,0 +1,16 @@
+{
+  "name": "mazhu",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "bin": {
+    "mazhu": "./src/cli.ts"
+  },
+  "scripts": {
+    "cli": "node src/cli.ts",
+    "check": "node --check src/cli.ts"
+  },
+  "engines": {
+    "node": ">=26"
+  }
+}

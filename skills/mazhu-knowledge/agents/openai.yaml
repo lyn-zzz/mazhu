@@ -1,0 +1,7 @@
+interface:
+  display_name: "码住知识库"
+  short_description: "查询并引用码住收藏的微信公众号文章"
+  default_prompt: "Use $mazhu-knowledge to answer using my saved WeChat articles."
+
+policy:
+  allow_implicit_invocation: true
