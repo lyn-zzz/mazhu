@@ -2,7 +2,7 @@
 
 码住是一个面向微信公众号文章的本地优先收藏和知识库工具。
 
-它让 Android 用户可以从微信分享菜单快速保存公众号文章，并把收藏夹同步到 Supabase。桌面端不提供独立应用，而是通过 CLI 和 Codex Skill 读取已同步的收藏数据，用于搜索、摘要生成和基于收藏夹的问答。
+它让 Android 用户可以从微信分享菜单快速保存公众号文章。默认情况下，收藏数据保存在手机本地；启用云同步后，数据可以同步到 Supabase，并进一步通过 CLI 和 Codex Skill 变成轻量知识库。
 
 ## Features
 
@@ -10,7 +10,7 @@
 - 本地优先保存，网络不可用时不会丢失收藏。
 - 默认保存到“默认收藏夹”，也支持自定义收藏夹。
 - 后台解析文章标题、公众号、正文等信息。
-- 使用 Supabase Auth 和 PostgreSQL 同步收藏夹与文章。
+- 可选启用 Supabase Auth 和 PostgreSQL 同步收藏夹与文章。
 - 通过 CLI 管理收藏、搜索文章、读取全文、生成 AI 摘要。
 - 通过 Codex Skill 将收藏夹作为轻量知识库使用，并在回答中引用原文链接。
 
@@ -29,14 +29,18 @@ docs/                       安装和架构文档
 
 完整安装步骤见 [docs/setup.md](docs/setup.md)。
 
-核心流程：
+普通用户路径：
 
-1. 创建 Supabase 项目并执行 `supabase/migrations/` 下的 SQL。
-2. 复制 `android/local.properties.example` 为 `android/local.properties`，填入 Android SDK 和 Supabase 配置。
-3. 用 Android Studio 打开 `android/` 并运行应用。
-4. 在微信文章分享菜单中选择“码住”，保存到收藏夹。
-5. 在电脑上通过 CLI 登录并查询已同步文章。
-6. 安装 `mazhu-knowledge` Codex Skill，让 Codex 基于收藏夹回答问题。
+1. 安装码住 Android App。
+2. 在微信文章分享菜单中选择“码住”。
+3. 选择收藏夹，或直接保存到“默认收藏夹”。
+4. 不登录也可以作为本地收藏夹使用。
+
+增强路径：
+
+1. 在 App 中启用云同步，登录 Supabase 账号。
+2. 在电脑上通过 CLI 登录同一个账号。
+3. 安装 `mazhu-knowledge` Codex Skill，让 Codex 基于收藏夹回答问题。
 
 ## CLI
 
@@ -49,7 +53,7 @@ npm run cli -- config set
 npm run cli -- summarize --all
 ```
 
-CLI 会读取 `android/local.properties` 中的 Supabase 项目配置。用户登录会话保存在 `~/.mazhu/session.json`，模型配置保存在 `~/.mazhu/config.json`。
+CLI 会读取 `android/local.properties` 中的 Supabase 项目配置，也可以在后续版本中切换到官方服务配置。用户登录会话保存在 `~/.mazhu/session.json`，模型配置保存在 `~/.mazhu/config.json`。
 
 摘要功能要求模型服务兼容 OpenAI Chat Completions API，配置项为：
 
@@ -107,14 +111,14 @@ CI 会在 push 和 pull request 时运行 CLI 检查、Android 单测和 debug A
 - Android App 只负责收藏、查看和同步，不展示 AI 摘要。
 - AI 摘要、全文读取和问答由 CLI 与 Codex Skill 负责。
 - 当前不使用 embedding 检索，优先通过收藏夹、标题、摘要和 topics 做轻量检索。
-- 项目不需要自建服务器；云端依赖 Supabase。
+- 项目不需要自建服务器；云同步依赖 Supabase。
 - 解析失败或疑似异常的文章不会直接送入模型生成摘要。
 
 更多设计说明见 [docs/architecture.md](docs/architecture.md)。
 
 ## Status
 
-码住目前处于早期版本，已覆盖 Android 收藏、Supabase 同步、CLI 查询、AI 摘要和 Codex Skill 问答主路径。
+码住目前处于早期版本，已覆盖 Android 本地收藏、可选 Supabase 同步、CLI 查询、AI 摘要和 Codex Skill 问答主路径。
 
 当前边界：
 

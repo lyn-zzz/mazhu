@@ -13,6 +13,9 @@ class SyncWorker(
 ) : CoroutineWorker(appContext, workerParams) {
     override suspend fun doWork(): Result {
         val application = applicationContext as MazhuApplication
+        if (!application.supabaseConfigStore.current().isConfigured) {
+            return Result.success()
+        }
         val session = application.authRepository.getValidSession()
             ?: return Result.success()
         val dao = application.database.bookmarkDao()

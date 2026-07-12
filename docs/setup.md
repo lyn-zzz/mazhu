@@ -1,16 +1,54 @@
 # Setup
 
-本文档说明如何从零运行码住。项目由 Android App、Supabase 数据库、CLI 和 Codex Skill 四部分组成。
+本文档说明如何从零运行码住。项目由 Android App、可选 Supabase 同步、CLI 和 Codex Skill 四部分组成。
 
 ## Prerequisites
 
 - Android Studio
 - Android 手机，已开启 USB 调试
 - Node.js 26 或更高版本
-- Supabase 项目
+- 可选：Supabase 项目，用于云同步和桌面端 AI 问答
 - 可选：Codex，用于安装 `mazhu-knowledge` Skill
 
-## 1. Supabase
+## 1. Android App
+
+如果只想把码住作为手机本地收藏夹使用，不需要先配置 Supabase。安装 App 后即可从微信分享菜单保存文章。
+
+开发运行时，复制配置模板：
+
+```bash
+cp android/local.properties.example android/local.properties
+```
+
+只填写 Android SDK 路径也可以构建本地-only 版本：
+
+```properties
+sdk.dir=/path/to/Android/sdk
+```
+
+如需在 APK 中内置默认 Supabase 配置，可继续填写：
+
+```properties
+SUPABASE_URL=https://your-project-ref.supabase.co
+SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
+```
+
+也可以不在构建时填写 Supabase 配置，后续在 App 的云同步设置中输入。
+
+`android/local.properties` 包含本机路径和项目配置，不应提交到 Git。
+
+用 Android Studio 打开 `android/` 目录，连接 Android 手机后运行应用。
+
+保存公众号文章的路径：
+
+1. 在微信中打开公众号文章。
+2. 点击右上角分享。
+3. 选择“码住”。
+4. 选择收藏夹，或直接保存到“默认收藏夹”。
+
+未启用云同步时，文章会显示为“仅本地”。启用云同步并登录后，本地收藏会进入同步队列。
+
+## 2. Supabase Sync
 
 创建 Supabase 项目后，在 SQL Editor 中按顺序执行：
 
@@ -21,34 +59,7 @@ supabase/migrations/0002_add_summary_fields.sql
 
 数据库使用 Supabase Auth 的用户 ID 做隔离，并启用 RLS。每个登录用户只能读写自己的收藏夹和文章。
 
-## 2. Android App
-
-复制配置模板：
-
-```bash
-cp android/local.properties.example android/local.properties
-```
-
-填写本机 Android SDK 路径和 Supabase 配置：
-
-```properties
-sdk.dir=/path/to/Android/sdk
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
-```
-
-`android/local.properties` 包含本机路径和项目配置，不应提交到 Git。
-
-用 Android Studio 打开 `android/` 目录，连接 Android 手机后运行应用。首次使用时在应用内用邮箱密码登录 Supabase。
-
-保存公众号文章的路径：
-
-1. 在微信中打开公众号文章。
-2. 点击右上角分享。
-3. 选择“码住”。
-4. 选择收藏夹，或直接保存到“默认收藏夹”。
-
-网络不可用时，文章会先保存在本地，并显示为未同步；网络恢复后可以手动同步。
+在 App 中打开云同步设置，填写 Supabase URL 和 publishable key，然后用邮箱密码注册或登录。网络不可用时，文章会先保存在本地；网络恢复后可以手动同步。
 
 ## 3. CLI
 

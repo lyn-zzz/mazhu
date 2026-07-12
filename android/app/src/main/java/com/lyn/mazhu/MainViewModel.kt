@@ -8,6 +8,7 @@ import com.lyn.mazhu.data.CollectionSummary
 import com.lyn.mazhu.data.CreateCollectionResult
 import com.lyn.mazhu.data.RenameCollectionResult
 import com.lyn.mazhu.supabase.AuthResult
+import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
 import com.lyn.mazhu.worker.SyncWorkScheduler
 import kotlinx.coroutines.flow.SharingStarted
@@ -19,8 +20,10 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val app = application as MazhuApplication
     private val repository = (application as MazhuApplication).bookmarkRepository
     private val authRepository = app.authRepository
+    private val supabaseConfigStore = app.supabaseConfigStore
 
     val session: StateFlow<SupabaseSession?> = authRepository.session
+    val supabaseConfig: StateFlow<SupabaseConfig> = supabaseConfigStore.config
 
     val collections: StateFlow<List<CollectionSummary>> = repository.observeCollections()
         .stateIn(
@@ -107,6 +110,26 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun signOut() {
+        authRepository.signOut()
+    }
+
+    fun saveSupabaseConfig(
+        url: String,
+        publishableKey: String,
+        onComplete: () -> Unit,
+    ) {
+        supabaseConfigStore.save(
+            SupabaseConfig(
+                url = url,
+                publishableKey = publishableKey,
+            ),
+        )
+        authRepository.signOut()
+        onComplete()
+    }
+
+    fun resetSupabaseConfig() {
+        supabaseConfigStore.reset()
         authRepository.signOut()
     }
 

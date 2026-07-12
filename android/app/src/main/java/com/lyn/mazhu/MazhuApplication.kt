@@ -5,12 +5,14 @@ import com.lyn.mazhu.data.BookmarkDatabase
 import com.lyn.mazhu.data.BookmarkRepository
 import com.lyn.mazhu.supabase.AuthRepository
 import com.lyn.mazhu.supabase.SessionStore
+import com.lyn.mazhu.supabase.SupabaseConfigStore
 import com.lyn.mazhu.supabase.SupabaseDataClient
 import com.lyn.mazhu.supabase.SupabaseHttpClient
 
 class MazhuApplication : Application() {
     val database by lazy { BookmarkDatabase.create(this) }
-    private val supabaseHttpClient by lazy { SupabaseHttpClient() }
+    val supabaseConfigStore by lazy { SupabaseConfigStore(this) }
+    private val supabaseHttpClient by lazy { SupabaseHttpClient(supabaseConfigStore) }
     val authRepository by lazy {
         AuthRepository(
             httpClient = supabaseHttpClient,

@@ -1,13 +1,14 @@
 package com.lyn.mazhu.supabase
 
-import com.lyn.mazhu.BuildConfig
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import org.json.JSONObject
 
-class SupabaseHttpClient {
+class SupabaseHttpClient(
+    private val configStore: SupabaseConfigStore,
+) {
     suspend fun request(
         path: String,
         method: String,
@@ -15,14 +16,15 @@ class SupabaseHttpClient {
         body: String? = null,
         prefer: String? = null,
     ): HttpResponse = withContext(Dispatchers.IO) {
-        check(BuildConfig.SUPABASE_URL.isNotBlank()) {
-            "SUPABASE_URL is not configured"
+        val config = configStore.current()
+        check(config.url.isNotBlank()) {
+            "请先在设置中启用云同步"
         }
-        check(BuildConfig.SUPABASE_PUBLISHABLE_KEY.isNotBlank()) {
-            "SUPABASE_PUBLISHABLE_KEY is not configured"
+        check(config.publishableKey.isNotBlank()) {
+            "请先在设置中启用云同步"
         }
 
-        val connection = URL("${BuildConfig.SUPABASE_URL}$path")
+        val connection = URL("${config.url}$path")
             .openConnection() as HttpURLConnection
         try {
             connection.requestMethod = method
@@ -30,7 +32,7 @@ class SupabaseHttpClient {
             connection.readTimeout = 25_000
             connection.setRequestProperty(
                 "apikey",
-                BuildConfig.SUPABASE_PUBLISHABLE_KEY,
+                config.publishableKey,
             )
             connection.setRequestProperty("Accept", "application/json")
             connection.setRequestProperty("Content-Type", "application/json")

@@ -34,6 +34,7 @@ import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -77,6 +78,7 @@ import com.lyn.mazhu.data.CollectionSummary
 import com.lyn.mazhu.data.CreateCollectionResult
 import com.lyn.mazhu.data.RenameCollectionResult
 import com.lyn.mazhu.supabase.AuthResult
+import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
 import com.lyn.mazhu.ui.theme.MazhuTheme
 import com.lyn.mazhu.worker.ParseWorkScheduler
@@ -113,6 +115,7 @@ private fun MazhuApp(
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
     val session by viewModel.session.collectAsStateWithLifecycle()
+    val supabaseConfig by viewModel.supabaseConfig.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
     var selectedCollectionId by remember { mutableStateOf<String?>(null) }
@@ -122,6 +125,7 @@ private fun MazhuApp(
     var moveTarget by remember { mutableStateOf<Bookmark?>(null) }
     var showAuthDialog by remember { mutableStateOf(false) }
     var showAccountDialog by remember { mutableStateOf(false) }
+    var showSyncSettingsDialog by remember { mutableStateOf(false) }
 
     val selectedCollection = collections.firstOrNull { it.id == selectedCollectionId }
     val visibleBookmarks = if (selectedCollectionId == null) {
@@ -167,7 +171,11 @@ private fun MazhuApp(
                     IconButton(
                         onClick = {
                             if (session == null) {
-                                showAuthDialog = true
+                                if (supabaseConfig.isConfigured) {
+                                    showAuthDialog = true
+                                } else {
+                                    showSyncSettingsDialog = true
+                                }
                             } else {
                                 viewModel.syncNow()
                                 scope.launch {
@@ -184,7 +192,11 @@ private fun MazhuApp(
                     IconButton(
                         onClick = {
                             if (session == null) {
-                                showAuthDialog = true
+                                if (supabaseConfig.isConfigured) {
+                                    showAuthDialog = true
+                                } else {
+                                    showSyncSettingsDialog = true
+                                }
                             } else {
                                 showAccountDialog = true
                             }
@@ -228,7 +240,14 @@ private fun MazhuApp(
                 if (session == null) {
                     item {
                         LoginSyncBanner(
-                            onClick = { showAuthDialog = true },
+                            configured = supabaseConfig.isConfigured,
+                            onClick = {
+                                if (supabaseConfig.isConfigured) {
+                                    showAuthDialog = true
+                                } else {
+                                    showSyncSettingsDialog = true
+                                }
+                            },
                         )
                     }
                 }
@@ -274,6 +293,7 @@ private fun MazhuApp(
                 ) { bookmark ->
                     BookmarkRow(
                         bookmark = bookmark,
+                        syncEnabled = supabaseConfig.isConfigured,
                         onMove = { moveTarget = bookmark },
                     )
                 }
@@ -395,9 +415,27 @@ private fun MazhuApp(
         )
     }
 
+    if (showSyncSettingsDialog) {
+        SyncSettingsDialog(
+            config = supabaseConfig,
+            onDismiss = { showSyncSettingsDialog = false },
+            onSave = { url, key ->
+                viewModel.saveSupabaseConfig(url, key) {
+                    showSyncSettingsDialog = false
+                    showAuthDialog = true
+                }
+            },
+            onReset = {
+                viewModel.resetSupabaseConfig()
+                showSyncSettingsDialog = false
+            },
+        )
+    }
+
     if (showAccountDialog && session != null) {
         AccountDialog(
             session = session!!,
+            config = supabaseConfig,
             onDismiss = { showAccountDialog = false },
             onSync = {
                 viewModel.syncNow()
@@ -410,12 +448,19 @@ private fun MazhuApp(
                 viewModel.signOut()
                 showAccountDialog = false
             },
+            onSettings = {
+                showAccountDialog = false
+                showSyncSettingsDialog = true
+            },
         )
     }
 }
 
 @Composable
-private fun LoginSyncBanner(onClick: () -> Unit) {
+private fun LoginSyncBanner(
+    configured: Boolean,
+    onClick: () -> Unit,
+) {
     Card(
         modifier = Modifier
             .fillMaxWidth()
@@ -440,22 +485,85 @@ private fun LoginSyncBanner(onClick: () -> Unit) {
                     .padding(start = 14.dp),
             ) {
                 Text(
-                    text = "登录后同步到云端",
+                    text = if (configured) "登录后同步到云端" else "当前仅保存在本机",
                     fontWeight = FontWeight.SemiBold,
                 )
                 Text(
-                    text = "未登录时仍会正常保存在手机本地",
+                    text = if (configured) {
+                        "未登录时仍会正常保存在手机本地"
+                    } else {
+                        "启用云同步后可在换手机和电脑端继续使用"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSecondaryContainer,
                 )
             }
             Text(
-                text = "登录",
+                text = if (configured) "登录" else "设置",
                 color = MaterialTheme.colorScheme.primary,
                 fontWeight = FontWeight.SemiBold,
             )
         }
     }
+}
+
+@Composable
+private fun SyncSettingsDialog(
+    config: SupabaseConfig,
+    onDismiss: () -> Unit,
+    onSave: (String, String) -> Unit,
+    onReset: () -> Unit,
+) {
+    var url by remember(config) { mutableStateOf(config.url) }
+    var publishableKey by remember(config) { mutableStateOf(config.publishableKey) }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("云同步设置") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text(
+                    text = "不启用云同步也可以正常收藏文章。启用后，收藏数据会同步到 Supabase，电脑端 CLI 和 Skill 也能读取。",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                TextField(
+                    value = url,
+                    onValueChange = { url = it },
+                    label = { Text("Supabase URL") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+                TextField(
+                    value = publishableKey,
+                    onValueChange = { publishableKey = it },
+                    label = { Text("Publishable key") },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth(),
+                )
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onSave(url, publishableKey) },
+                enabled = url.isNotBlank() && publishableKey.isNotBlank(),
+            ) {
+                Text("保存并登录")
+            }
+        },
+        dismissButton = {
+            Row {
+                if (config.isConfigured) {
+                    TextButton(onClick = onReset) {
+                        Text("关闭云同步")
+                    }
+                }
+                TextButton(onClick = onDismiss) {
+                    Text("取消")
+                }
+            }
+        },
+    )
 }
 
 private enum class AuthMode {
@@ -597,9 +705,11 @@ private fun AuthDialog(
 @Composable
 private fun AccountDialog(
     session: SupabaseSession,
+    config: SupabaseConfig,
     onDismiss: () -> Unit,
     onSync: () -> Unit,
     onSignOut: () -> Unit,
+    onSettings: () -> Unit,
 ) {
     AlertDialog(
         onDismissRequest = onDismiss,
@@ -620,6 +730,13 @@ private fun AccountDialog(
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                     )
                 }
+                Text(
+                    text = config.url,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                )
             }
         },
         confirmButton = {
@@ -629,6 +746,9 @@ private fun AccountDialog(
         },
         dismissButton = {
             Row {
+                TextButton(onClick = onSettings) {
+                    Text("设置")
+                }
                 TextButton(onClick = onSignOut) {
                     Text("退出登录")
                 }
@@ -831,6 +951,7 @@ private fun EmptyState(inCollection: Boolean) {
 @Composable
 private fun BookmarkRow(
     bookmark: Bookmark,
+    syncEnabled: Boolean,
     onMove: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -907,6 +1028,8 @@ private fun BookmarkRow(
                         com.lyn.mazhu.data.BookmarkStatus.SYNC_SYNCED
                     ) {
                         Icons.Outlined.CloudDone
+                    } else if (!syncEnabled) {
+                        Icons.Outlined.Settings
                     } else {
                         Icons.Outlined.CloudOff
                     },
@@ -922,7 +1045,7 @@ private fun BookmarkRow(
                     modifier = Modifier.size(16.dp),
                 )
                 Text(
-                    text = bookmark.statusLabel(),
+                    text = bookmark.statusLabel(syncEnabled),
                     style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(start = 5.dp),
@@ -935,12 +1058,14 @@ private fun BookmarkRow(
 private fun formatTime(timestamp: Long): String =
     SimpleDateFormat("MM月dd日 HH:mm", Locale.CHINA).format(Date(timestamp))
 
-private fun Bookmark.statusLabel(): String =
+private fun Bookmark.statusLabel(syncEnabled: Boolean): String =
     when (parseStatus) {
         com.lyn.mazhu.data.BookmarkStatus.PARSE_PENDING -> "等待解析"
         com.lyn.mazhu.data.BookmarkStatus.PARSE_PROCESSING -> "正在解析"
         com.lyn.mazhu.data.BookmarkStatus.PARSE_FAILED -> "解析失败"
-        else -> when (syncStatus) {
+        else -> if (!syncEnabled) {
+            "仅本地"
+        } else when (syncStatus) {
             com.lyn.mazhu.data.BookmarkStatus.SYNC_SYNCED -> "已同步"
             com.lyn.mazhu.data.BookmarkStatus.SYNC_SYNCING -> "同步中"
             else -> "未同步"
