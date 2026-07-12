@@ -81,6 +81,7 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -127,10 +128,13 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlin.math.max
 
 private const val PAGE_TRANSITION_DURATION_MS = 300
+private const val SEARCH_TRANSITION_DURATION_MS = 240
 private const val COVER_FADE_DURATION_MS = 220
-private const val SEARCH_KEYBOARD_DELAY_MS = 60L
+private const val SEARCH_KEYBOARD_DELAY_MS = 150L
+private const val COVER_DECODE_SIZE_PX = 320
 
 private object CoverImageMemoryCache {
     val images = mutableMapOf<String, ImageBitmap>()
@@ -230,18 +234,18 @@ private fun MazhuApp(
             if (targetState) {
                 slideIntoContainer(
                     AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
                 ) togetherWith slideOutOfContainer(
                     AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
                 )
             } else {
                 slideIntoContainer(
                     AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
                 ) togetherWith slideOutOfContainer(
                     AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
                 )
             }.using(SizeTransform(clip = false))
         },
@@ -641,6 +645,10 @@ private fun MainContent(
     onDeleteCollection: (CollectionSummary) -> Unit,
     onBookmarkMenu: (Bookmark) -> Unit,
 ) {
+    val isListScrolling by remember {
+        derivedStateOf { listState.isScrollInProgress }
+    }
+    val loadUncachedCovers = !isListScrolling
     val firstCoverByCollectionId = remember(collections, bookmarks, bookmarkCollectionIds) {
         collections.associate { collection ->
             val ids = bookmarkCollectionIds
@@ -790,6 +798,7 @@ private fun MainContent(
                         CollectionCard(
                             collection = collection,
                             coverUrl = firstCoverByCollectionId[collection.id],
+                            loadCover = loadUncachedCovers,
                             onOpen = { onOpenCollection(collection.id) },
                             onRename = { onRenameCollection(collection) },
                             onDelete = { onDeleteCollection(collection) },
@@ -827,6 +836,7 @@ private fun MainContent(
                         BookmarkRow(
                             bookmark = bookmark,
                             syncEnabled = supabaseConfigured,
+                            loadCover = loadUncachedCovers,
                             collectionNames = bookmarkCollectionIds[bookmark.id]
                                 .orEmpty()
                                 .mapNotNull { collectionById[it]?.name },
@@ -1009,6 +1019,7 @@ private fun SearchPage(
 @Composable
 private fun RemoteCoverImage(
     url: String?,
+    loadImage: Boolean,
     modifier: Modifier,
     cornerRadius: Int,
     fallback: @Composable () -> Unit = {
@@ -1023,10 +1034,14 @@ private fun RemoteCoverImage(
     var image by remember(url) {
         mutableStateOf(url?.let { CoverImageMemoryCache.images[it] })
     }
-    LaunchedEffect(url) {
+    LaunchedEffect(url, loadImage) {
         val coverUrl = url?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
         CoverImageMemoryCache.images[coverUrl]?.let { cachedImage ->
             image = cachedImage
+            return@LaunchedEffect
+        }
+        if (!loadImage) {
+            image = null
             return@LaunchedEffect
         }
         image = null
@@ -1037,7 +1052,7 @@ private fun RemoteCoverImage(
                     readTimeout = 8_000
                 }
                 connection.getInputStream().use { input ->
-                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                    decodeSampledCover(input.readBytes())?.asImageBitmap()
                 }
             }.getOrNull()
         }
@@ -1066,6 +1081,21 @@ private fun RemoteCoverImage(
             }
         }
     }
+}
+
+private fun decodeSampledCover(bytes: ByteArray): android.graphics.Bitmap? {
+    val bounds = BitmapFactory.Options().apply {
+        inJustDecodeBounds = true
+    }
+    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
+
+    val largestSide = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
+    val sampleSize = generateSequence(1) { it * 2 }
+        .first { largestSide / it <= COVER_DECODE_SIZE_PX || it >= 8 }
+    val options = BitmapFactory.Options().apply {
+        inSampleSize = sampleSize
+    }
+    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
 @Composable
@@ -1120,6 +1150,7 @@ private fun SearchResultRow(
     ) {
         RemoteCoverImage(
             url = bookmark.coverUrl,
+            loadImage = true,
             modifier = Modifier.size(92.dp),
             cornerRadius = 10,
         )
@@ -1571,6 +1602,7 @@ private fun AccountDialog(
 private fun CollectionCard(
     collection: CollectionSummary,
     coverUrl: String?,
+    loadCover: Boolean,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -1595,6 +1627,7 @@ private fun CollectionCard(
         ) {
             RemoteCoverImage(
                 url = coverUrl,
+                loadImage = loadCover,
                 modifier = Modifier.size(58.dp),
                 cornerRadius = 12,
                 fallback = {
@@ -1762,6 +1795,7 @@ private fun EmptyState(inCollection: Boolean) {
 private fun BookmarkRow(
     bookmark: Bookmark,
     syncEnabled: Boolean,
+    loadCover: Boolean,
     collectionNames: List<String>,
     onMenu: () -> Unit,
 ) {
@@ -1785,6 +1819,7 @@ private fun BookmarkRow(
             Row(verticalAlignment = Alignment.Top) {
                 RemoteCoverImage(
                     url = bookmark.coverUrl,
+                    loadImage = loadCover,
                     modifier = Modifier.size(82.dp),
                     cornerRadius = 12,
                 )
