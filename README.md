@@ -1,110 +1,63 @@
 # 码住
 
-码住是一个面向微信公众号文章的本地优先收藏应用。它解决三个问题：
+码住是一个面向微信公众号文章的本地优先收藏和知识库工具。
 
-- 在 Android 手机上从微信分享菜单快速收藏公众号文章。
-- 将收藏夹和文章同步到 Supabase。
-- 在 Mac 上通过 CLI 和 Codex Skill 把收藏夹变成轻量知识库。
+它让 Android 用户可以从微信分享菜单快速保存公众号文章，并把收藏夹同步到 Supabase。桌面端不提供独立应用，而是通过 CLI 和 Codex Skill 读取已同步的收藏数据，用于搜索、摘要生成和基于收藏夹的问答。
 
-当前仓库包含：
+## Features
+
+- 从 Android 分享菜单接收微信公众号文章链接。
+- 本地优先保存，网络不可用时不会丢失收藏。
+- 默认保存到“默认收藏夹”，也支持自定义收藏夹。
+- 后台解析文章标题、公众号、正文等信息。
+- 使用 Supabase Auth 和 PostgreSQL 同步收藏夹与文章。
+- 通过 CLI 管理收藏、搜索文章、读取全文、生成 AI 摘要。
+- 通过 Codex Skill 将收藏夹作为轻量知识库使用，并在回答中引用原文链接。
+
+## Repository
 
 ```text
 android/                    Android 原生应用
-src/cli.ts                  Mac 端 mazhu CLI
+src/cli.ts                  mazhu CLI
 skills/mazhu-knowledge/     Codex Skill 源文件
 supabase/migrations/        Supabase 数据库迁移
 scripts/install-codex-skill.sh
+docs/                       安装和架构文档
 ```
 
-## 功能
+## Quick Start
 
-### Android App
+完整安装步骤见 [docs/setup.md](docs/setup.md)。
 
-- 接收微信文章分享。
-- 立即保存到本地 Room 数据库。
-- 默认保存到“默认收藏夹”。
-- 支持新建、重命名、删除收藏夹。
-- 支持分享时选择收藏夹。
-- 后台解析微信公众号文章标题、公众号、正文等信息。
-- 邮箱密码登录 Supabase。
-- 自动同步和手动重试同步。
-- 网络失败时保留“未同步”，不丢失本地收藏。
+核心流程：
 
-### Mac CLI
+1. 创建 Supabase 项目并执行 `supabase/migrations/` 下的 SQL。
+2. 复制 `android/local.properties.example` 为 `android/local.properties`，填入 Android SDK 和 Supabase 配置。
+3. 用 Android Studio 打开 `android/` 并运行应用。
+4. 在微信文章分享菜单中选择“码住”，保存到收藏夹。
+5. 在电脑上通过 CLI 登录并查询已同步文章。
+6. 安装 `mazhu-knowledge` Codex Skill，让 Codex 基于收藏夹回答问题。
 
-CLI 用于读取和整理已经同步到 Supabase 的收藏数据：
+## CLI
 
 ```bash
 npm run cli -- login
 npm run cli -- collections
 npm run cli -- search GitHub
-npm run cli -- search UI
-npm run cli -- read <文章ID前缀>
+npm run cli -- read <article-id-prefix>
 npm run cli -- config set
 npm run cli -- summarize --all
 ```
 
-CLI 默认读取 `android/local.properties` 中的 Supabase 项目配置。登录会话保存在 `~/.mazhu/session.json`，模型配置保存在 `~/.mazhu/config.json`。
+CLI 会读取 `android/local.properties` 中的 Supabase 项目配置。用户登录会话保存在 `~/.mazhu/session.json`，模型配置保存在 `~/.mazhu/config.json`。
 
-### Codex Skill
-
-Skill 源文件在：
-
-```text
-skills/mazhu-knowledge/
-```
-
-安装到本机 Codex：
-
-```bash
-./scripts/install-codex-skill.sh
-```
-
-安装脚本会把当前项目目录写入本机 skill。也就是说，别人 clone 到自己的路径后运行安装脚本，skill 会自动指向他自己的项目目录。
-
-安装后可以在 Codex 中使用：
-
-```text
-使用 $mazhu-knowledge，帮我看看我收藏夹里有没有 UI 设计相关的 GitHub 开源项目
-```
-
-Skill 的策略是：先用 `mazhu search` 读取标题、收藏夹、AI 摘要和 topics；只有摘要不够时才用 `mazhu read` 读取全文；回答时带文章标题和原文链接。
-
-## 本地配置
-
-### Android Supabase 配置
-
-复制模板：
-
-```bash
-cp android/local.properties.example android/local.properties
-```
-
-填写：
-
-```properties
-sdk.dir=/path/to/Android/sdk
-SUPABASE_URL=https://your-project-ref.supabase.co
-SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
-```
-
-`android/local.properties` 不要提交到 Git。
-
-### CLI 模型配置
-
-摘要功能要求模型服务兼容 OpenAI Chat Completions API，只需要三项配置：
+摘要功能要求模型服务兼容 OpenAI Chat Completions API，配置项为：
 
 - `baseUrl`
 - `apiKey`
 - `modelName`
 
-交互式配置：
-
-```bash
-npm run cli -- config set
-```
-
-也可以使用环境变量临时运行：
+也可以用环境变量临时覆盖：
 
 ```bash
 MAZHU_MODEL_BASE_URL=https://example.com/compatible-mode/v1 \
@@ -113,50 +66,62 @@ MAZHU_MODEL_NAME=deepseek-v4-flash \
 npm run cli -- summarize --all
 ```
 
-不要把 API Key 写进仓库。
+## Codex Skill
 
-## Supabase 初始化
+Skill 源文件位于 `skills/mazhu-knowledge/`。
 
-创建 Supabase 项目后，按顺序执行：
+安装到本机 Codex：
 
-```sql
-supabase/migrations/0001_create_core_schema.sql
-supabase/migrations/0002_add_summary_fields.sql
+```bash
+./scripts/install-codex-skill.sh
 ```
 
-表结构使用 Supabase Auth 的 `auth.users`，并启用 RLS。客户端只能访问当前登录用户自己的收藏夹和文章。
+安装后可以在 Codex 中使用：
 
-## 开发命令
+```text
+使用 $mazhu-knowledge，帮我看看收藏夹里有没有 UI 设计相关的 GitHub 开源项目
+```
 
-Android：
+Skill 的默认策略是先搜索标题、收藏夹、AI 摘要和 topics；只有摘要不足时才读取全文；回答时引用文章标题和原文链接。
+
+## Development
+
+Android:
 
 ```bash
 cd android
-JAVA_HOME='/Applications/Android Studio.app/Contents/jbr/Contents/Home' ./gradlew testDebugUnitTest assembleDebug
+./gradlew testDebugUnitTest assembleDebug
 ```
 
-CLI：
+CLI:
 
 ```bash
 npm run check
 npm run cli -- --help
 ```
 
-## 解析质量策略
+CI 会在 push 和 pull request 时运行 CLI 检查、Android 单测和 debug APK 构建。
 
-`mazhu summarize` 不会盲目把所有正文丢给模型。它会先检查：
+## Design Notes
 
-- 文章解析状态必须是 `success`
-- 正文不能过短
-- 正文开头不能明显是错误页、验证页或反爬提示
-- 正文需要包含足够中文内容
-- 正文不能明显高度重复
+- Android App 只负责收藏、查看和同步，不展示 AI 摘要。
+- AI 摘要、全文读取和问答由 CLI 与 Codex Skill 负责。
+- 当前不使用 embedding 检索，优先通过收藏夹、标题、摘要和 topics 做轻量检索。
+- 项目不需要自建服务器；云端依赖 Supabase。
+- 解析失败或疑似异常的文章不会直接送入模型生成摘要。
 
-不通过检查的文章会标记为 `skipped` 和 `content_quality_status = suspect`，后续可以改进解析器后再用 `--force` 重新生成摘要。
+更多设计说明见 [docs/architecture.md](docs/architecture.md)。
 
-## 当前边界
+## Status
+
+码住目前处于早期版本，已覆盖 Android 收藏、Supabase 同步、CLI 查询、AI 摘要和 Codex Skill 问答主路径。
+
+当前边界：
 
 - 暂不支持 iOS 和 Windows。
-- 暂不做 embedding 检索。
-- 手机端不展示 AI 摘要，只负责收藏、查看和同步。
-- Mac 端 CLI 和 Codex Skill 负责知识库问答。
+- 暂不提供桌面 GUI。
+- 暂不自动发布签名 APK。
+
+## License
+
+MIT
