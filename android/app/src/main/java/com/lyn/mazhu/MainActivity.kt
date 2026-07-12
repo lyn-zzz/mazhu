@@ -4,13 +4,22 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
+import androidx.activity.SystemBarStyle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.ExperimentalAnimationApi
+import androidx.compose.animation.SizeTransform
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -19,9 +28,12 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
@@ -71,9 +83,15 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
@@ -98,6 +116,7 @@ import com.lyn.mazhu.worker.SyncWorkScheduler
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private enum class CollectionPickerMode {
@@ -113,7 +132,10 @@ private data class CollectionPickerTarget(
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        enableEdgeToEdge()
+        enableEdgeToEdge(
+            statusBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+            navigationBarStyle = SystemBarStyle.light(Color.TRANSPARENT, Color.TRANSPARENT),
+        )
         setContent {
             MazhuTheme {
                 MazhuApp()
@@ -129,7 +151,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
 @Composable
 private fun MazhuApp(
     viewModel: MainViewModel = viewModel(),
@@ -185,186 +207,88 @@ private fun MazhuApp(
         selectedCollectionId = null
     }
 
-    if (showSearchPage) {
-        SearchPage(
-            bookmarks = bookmarks,
-            bookmarkCollectionIds = bookmarkCollectionIds,
-            collectionById = collectionById,
-            onDismiss = { showSearchPage = false },
-        )
-        return
-    }
-
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    if (selectedCollection != null) {
-                        IconButton(onClick = { selectedCollectionId = null }) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                                contentDescription = "返回",
-                            )
+    AnimatedContent(
+        targetState = showSearchPage,
+        transitionSpec = {
+            if (targetState) {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(260),
+                ) togetherWith slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(260),
+                )
+            } else {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(260),
+                ) togetherWith slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(260),
+                )
+            }.using(SizeTransform(clip = false))
+        },
+        label = "main-search-transition",
+    ) { searchVisible ->
+        if (searchVisible) {
+            SearchPage(
+                bookmarks = bookmarks,
+                bookmarkCollectionIds = bookmarkCollectionIds,
+                collectionById = collectionById,
+                onDismiss = { showSearchPage = false },
+            )
+        } else {
+            MainContent(
+                collections = collections,
+                visibleBookmarks = visibleBookmarks,
+                bookmarkCollectionIds = bookmarkCollectionIds,
+                collectionById = collectionById,
+                selectedCollection = selectedCollection,
+                selectedCollectionId = selectedCollectionId,
+                supabaseConfigured = supabaseConfig.isConfigured,
+                session = session,
+                listState = listState,
+                snackbarHostState = snackbarHostState,
+                onBackFromCollection = { selectedCollectionId = null },
+                onOpenSearch = { showSearchPage = true },
+                onSyncClick = {
+                    if (session == null) {
+                        if (supabaseConfig.isConfigured) {
+                            showAuthDialog = true
+                        } else {
+                            showSyncSettingsDialog = true
+                        }
+                    } else {
+                        viewModel.syncNow()
+                        scope.launch {
+                            snackbarHostState.showSnackbar("已开始同步")
                         }
                     }
                 },
-                title = {
-                    Column {
-                        Text(
-                            text = selectedCollection?.name ?: "码住",
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = selectedCollection?.let { "${it.articleCount} 篇文章" }
-                                ?: "把值得看的文章先存下来",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
+                onAccountClick = {
+                    if (session == null) {
+                        if (supabaseConfig.isConfigured) {
+                            showAuthDialog = true
+                        } else {
+                            showSyncSettingsDialog = true
+                        }
+                    } else {
+                        showAccountDialog = true
                     }
                 },
-                actions = {
-                    IconButton(onClick = { showSearchPage = true }) {
-                        Icon(
-                            imageVector = Icons.Outlined.Search,
-                            contentDescription = "搜索",
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            if (session == null) {
-                                if (supabaseConfig.isConfigured) {
-                                    showAuthDialog = true
-                                } else {
-                                    showSyncSettingsDialog = true
-                                }
-                            } else {
-                                viewModel.syncNow()
-                                scope.launch {
-                                    snackbarHostState.showSnackbar("已开始同步")
-                                }
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.CloudUpload,
-                            contentDescription = "同步",
-                        )
-                    }
-                    IconButton(
-                        onClick = {
-                            if (session == null) {
-                                if (supabaseConfig.isConfigured) {
-                                    showAuthDialog = true
-                                } else {
-                                    showSyncSettingsDialog = true
-                                }
-                            } else {
-                                showAccountDialog = true
-                            }
-                        },
-                    ) {
-                        Icon(
-                            imageVector = Icons.Outlined.AccountCircle,
-                            contentDescription = "账号",
-                        )
+                onCreateCollection = { showCreateDialog = true },
+                onLoginSync = {
+                    if (supabaseConfig.isConfigured) {
+                        showAuthDialog = true
+                    } else {
+                        showSyncSettingsDialog = true
                     }
                 },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
+                onOpenCollection = { selectedCollectionId = it },
+                onRenameCollection = { renameTarget = it },
+                onDeleteCollection = { deleteTarget = it },
+                onBookmarkMenu = { actionTarget = it },
             )
-        },
-        floatingActionButton = {
-            if (selectedCollectionId == null) {
-                FloatingActionButton(onClick = { showCreateDialog = true }) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = "新建收藏夹",
-                    )
-                }
-            }
-        },
-    ) { padding ->
-        LazyColumn(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-            state = listState,
-            contentPadding = PaddingValues(
-                start = 16.dp,
-                end = 16.dp,
-                top = 12.dp,
-                bottom = 96.dp,
-            ),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
-        ) {
-            if (selectedCollectionId == null) {
-                if (session == null) {
-                    item {
-                        LoginSyncBanner(
-                            configured = supabaseConfig.isConfigured,
-                            onClick = {
-                                if (supabaseConfig.isConfigured) {
-                                    showAuthDialog = true
-                                } else {
-                                    showSyncSettingsDialog = true
-                                }
-                            },
-                        )
-                    }
-                }
-
-                item {
-                    Text(
-                        text = "收藏夹",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                    )
-                }
-
-                items(
-                    items = collections,
-                    key = CollectionSummary::id,
-                ) { collection ->
-                    CollectionCard(
-                        collection = collection,
-                        onOpen = { selectedCollectionId = collection.id },
-                        onRename = { renameTarget = collection },
-                        onDelete = { deleteTarget = collection },
-                    )
-                }
-
-                item {
-                    Text(
-                        text = "最近收藏",
-                        style = MaterialTheme.typography.titleMedium,
-                        fontWeight = FontWeight.SemiBold,
-                        modifier = Modifier.padding(top = 12.dp),
-                    )
-                }
-            }
-
-            if (visibleBookmarks.isEmpty()) {
-                item {
-                    EmptyState(inCollection = selectedCollectionId != null)
-                }
-            } else {
-                items(
-                    items = visibleBookmarks,
-                    key = Bookmark::id,
-                ) { bookmark ->
-                    BookmarkRow(
-                        bookmark = bookmark,
-                        syncEnabled = supabaseConfig.isConfigured,
-                        collectionNames = bookmarkCollectionIds[bookmark.id]
-                            .orEmpty()
-                            .mapNotNull { collectionById[it]?.name },
-                        onMenu = { actionTarget = bookmark },
-                    )
-                }
-            }
         }
     }
 
@@ -657,6 +581,195 @@ private fun MazhuApp(
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalAnimationApi::class)
+@Composable
+private fun MainContent(
+    collections: List<CollectionSummary>,
+    visibleBookmarks: List<Bookmark>,
+    bookmarkCollectionIds: Map<String, List<String>>,
+    collectionById: Map<String, CollectionSummary>,
+    selectedCollection: CollectionSummary?,
+    selectedCollectionId: String?,
+    supabaseConfigured: Boolean,
+    session: SupabaseSession?,
+    listState: LazyListState,
+    snackbarHostState: SnackbarHostState,
+    onBackFromCollection: () -> Unit,
+    onOpenSearch: () -> Unit,
+    onSyncClick: () -> Unit,
+    onAccountClick: () -> Unit,
+    onCreateCollection: () -> Unit,
+    onLoginSync: () -> Unit,
+    onOpenCollection: (String) -> Unit,
+    onRenameCollection: (CollectionSummary) -> Unit,
+    onDeleteCollection: (CollectionSummary) -> Unit,
+    onBookmarkMenu: (Bookmark) -> Unit,
+) {
+    Scaffold(
+        containerColor = MaterialTheme.colorScheme.background,
+        snackbarHost = { SnackbarHost(snackbarHostState) },
+        topBar = {
+            TopAppBar(
+                navigationIcon = {
+                    if (selectedCollection != null) {
+                        IconButton(onClick = onBackFromCollection) {
+                            Icon(
+                                imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                                contentDescription = "返回",
+                            )
+                        }
+                    }
+                },
+                title = {
+                    Column {
+                        Text(
+                            text = selectedCollection?.name ?: "码住",
+                            fontWeight = FontWeight.Bold,
+                        )
+                        Text(
+                            text = selectedCollection?.let { "${it.articleCount} 篇文章" }
+                                ?: "把值得看的文章先存下来",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        )
+                    }
+                },
+                actions = {
+                    IconButton(onClick = onOpenSearch) {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = "搜索",
+                        )
+                    }
+                    IconButton(onClick = onSyncClick) {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudUpload,
+                            contentDescription = "同步",
+                        )
+                    }
+                    IconButton(onClick = onAccountClick) {
+                        Icon(
+                            imageVector = Icons.Outlined.AccountCircle,
+                            contentDescription = "账号",
+                        )
+                    }
+                },
+                colors = TopAppBarDefaults.topAppBarColors(
+                    containerColor = MaterialTheme.colorScheme.background,
+                ),
+            )
+        },
+        floatingActionButton = {
+            if (selectedCollectionId == null) {
+                FloatingActionButton(onClick = onCreateCollection) {
+                    Icon(
+                        imageVector = Icons.Outlined.Add,
+                        contentDescription = "新建收藏夹",
+                    )
+                }
+            }
+        },
+    ) { padding ->
+        AnimatedContent(
+            targetState = selectedCollectionId,
+            transitionSpec = {
+                if (targetState != null) {
+                    slideIntoContainer(
+                        AnimatedContentTransitionScope.SlideDirection.Left,
+                        animationSpec = tween(240),
+                    ) togetherWith slideOutOfContainer(
+                        AnimatedContentTransitionScope.SlideDirection.Left,
+                        animationSpec = tween(240),
+                    )
+                } else {
+                    slideIntoContainer(
+                        AnimatedContentTransitionScope.SlideDirection.Right,
+                        animationSpec = tween(240),
+                    ) togetherWith slideOutOfContainer(
+                        AnimatedContentTransitionScope.SlideDirection.Right,
+                        animationSpec = tween(240),
+                    )
+                }.using(SizeTransform(clip = false))
+            },
+            label = "collection-transition",
+            modifier = Modifier.padding(padding),
+        ) { currentCollectionId ->
+            LazyColumn(
+                modifier = Modifier.fillMaxSize(),
+                state = listState,
+                contentPadding = PaddingValues(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 12.dp,
+                    bottom = 96.dp,
+                ),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                if (currentCollectionId == null) {
+                    if (session == null) {
+                        item {
+                            LoginSyncBanner(
+                                configured = supabaseConfigured,
+                                onClick = onLoginSync,
+                            )
+                        }
+                    }
+
+                    item {
+                        Text(
+                            text = "收藏夹",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                        )
+                    }
+
+                    items(
+                        items = collections,
+                        key = CollectionSummary::id,
+                    ) { collection ->
+                        CollectionCard(
+                            collection = collection,
+                            onOpen = { onOpenCollection(collection.id) },
+                            onRename = { onRenameCollection(collection) },
+                            onDelete = { onDeleteCollection(collection) },
+                        )
+                    }
+
+                    item {
+                        Text(
+                            text = "最近收藏",
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.SemiBold,
+                            modifier = Modifier.padding(top = 12.dp),
+                        )
+                    }
+                }
+
+                if (visibleBookmarks.isEmpty()) {
+                    item {
+                        EmptyState(inCollection = currentCollectionId != null)
+                    }
+                } else {
+                    items(
+                        items = visibleBookmarks,
+                        key = Bookmark::id,
+                    ) { bookmark ->
+                        BookmarkRow(
+                            bookmark = bookmark,
+                            syncEnabled = supabaseConfigured,
+                            collectionNames = bookmarkCollectionIds[bookmark.id]
+                                .orEmpty()
+                                .mapNotNull { collectionById[it]?.name },
+                            onMenu = { onBookmarkMenu(bookmark) },
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 private fun SearchPage(
     bookmarks: List<Bookmark>,
@@ -665,6 +778,9 @@ private fun SearchPage(
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    val focusRequester = remember { FocusRequester() }
     var query by remember { mutableStateOf("") }
     var histories by remember { mutableStateOf(loadSearchHistory(context)) }
     val trimmedQuery = query.trim()
@@ -691,12 +807,22 @@ private fun SearchPage(
 
     BackHandler(onBack = onDismiss)
 
+    LaunchedEffect(Unit) {
+        delay(220)
+        focusRequester.requestFocus()
+        keyboardController?.show()
+    }
+
     Scaffold(
         containerColor = MaterialTheme.colorScheme.background,
+        modifier = Modifier
+            .fillMaxSize()
+            .imePadding(),
         topBar = {
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
@@ -717,9 +843,15 @@ private fun SearchPage(
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
-                        onSearch = { commitSearch() },
+                        onSearch = {
+                            commitSearch()
+                            focusManager.clearFocus()
+                            keyboardController?.hide()
+                        },
                     ),
-                    modifier = Modifier.weight(1f),
+                    modifier = Modifier
+                        .weight(1f)
+                        .focusRequester(focusRequester),
                 )
                 TextButton(onClick = onDismiss) {
                     Text("取消")
@@ -730,7 +862,13 @@ private fun SearchPage(
         LazyColumn(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(padding),
+                .padding(padding)
+                .pointerInput(Unit) {
+                    detectTapGestures {
+                        focusManager.clearFocus()
+                        keyboardController?.hide()
+                    }
+                },
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
