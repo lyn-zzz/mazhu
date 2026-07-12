@@ -4,6 +4,7 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
+import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -18,6 +19,7 @@ import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
@@ -89,9 +91,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
@@ -116,8 +120,13 @@ import com.lyn.mazhu.worker.SyncWorkScheduler
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.net.URL
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+private const val PAGE_TRANSITION_DURATION_MS = 360
 
 private enum class CollectionPickerMode {
     MOVE,
@@ -167,6 +176,7 @@ private fun MazhuApp(
     val context = LocalContext.current
     var selectedCollectionId by remember { mutableStateOf<String?>(null) }
     var showSearchPage by remember { mutableStateOf(false) }
+    var searchCollectionId by remember { mutableStateOf<String?>(null) }
     var showCreateDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<CollectionSummary?>(null) }
     var deleteTarget by remember { mutableStateOf<CollectionSummary?>(null) }
@@ -178,19 +188,18 @@ private fun MazhuApp(
     var showSyncSettingsDialog by remember { mutableStateOf(false) }
     var clipboardUrl by remember { mutableStateOf<String?>(null) }
 
-    val selectedCollection = collections.firstOrNull { it.id == selectedCollectionId }
     val collectionById = collections.associateBy { it.id }
     val bookmarkCollectionIds = bookmarkCollections
         .groupBy { it.bookmarkId }
         .mapValues { entry -> entry.value.map { it.collectionId } }
-    val selectedBookmarkIds = selectedCollectionId?.let { collectionId ->
+    val searchBookmarkIds = searchCollectionId?.let { collectionId ->
         bookmarkCollections
             .filter { it.collectionId == collectionId }
             .map { it.bookmarkId }
             .toSet()
     }
-    val visibleBookmarks = bookmarks
-        .filter { bookmark -> selectedBookmarkIds == null || bookmark.id in selectedBookmarkIds }
+    val searchBookmarks = bookmarks
+        .filter { bookmark -> searchBookmarkIds == null || bookmark.id in searchBookmarkIds }
 
     LaunchedEffect(selectedCollectionId) {
         listState.scrollToItem(0)
@@ -213,18 +222,18 @@ private fun MazhuApp(
             if (targetState) {
                 slideIntoContainer(
                     AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(260),
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
                 ) togetherWith slideOutOfContainer(
                     AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(260),
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
                 )
             } else {
                 slideIntoContainer(
                     AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(260),
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
                 ) togetherWith slideOutOfContainer(
                     AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(260),
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
                 )
             }.using(SizeTransform(clip = false))
         },
@@ -232,25 +241,44 @@ private fun MazhuApp(
     ) { searchVisible ->
         if (searchVisible) {
             SearchPage(
-                bookmarks = bookmarks,
+                bookmarks = searchBookmarks,
                 bookmarkCollectionIds = bookmarkCollectionIds,
                 collectionById = collectionById,
-                onDismiss = { showSearchPage = false },
+                placeholder = if (searchCollectionId == null) {
+                    "搜索收藏文章"
+                } else {
+                    "搜索当前收藏夹"
+                },
+                resultFooter = if (searchCollectionId == null) {
+                    "以上为全部收藏文章的搜索结果"
+                } else {
+                    "以上为当前收藏夹的搜索结果"
+                },
+                onDismiss = {
+                    showSearchPage = false
+                    searchCollectionId = null
+                },
             )
         } else {
             MainContent(
                 collections = collections,
-                visibleBookmarks = visibleBookmarks,
+                bookmarks = bookmarks,
                 bookmarkCollectionIds = bookmarkCollectionIds,
                 collectionById = collectionById,
-                selectedCollection = selectedCollection,
                 selectedCollectionId = selectedCollectionId,
                 supabaseConfigured = supabaseConfig.isConfigured,
                 session = session,
                 listState = listState,
                 snackbarHostState = snackbarHostState,
                 onBackFromCollection = { selectedCollectionId = null },
-                onOpenSearch = { showSearchPage = true },
+                onOpenSearch = {
+                    searchCollectionId = null
+                    showSearchPage = true
+                },
+                onOpenCollectionSearch = { collectionId ->
+                    searchCollectionId = collectionId
+                    showSearchPage = true
+                },
                 onSyncClick = {
                     if (session == null) {
                         if (supabaseConfig.isConfigured) {
@@ -585,10 +613,9 @@ private fun MazhuApp(
 @Composable
 private fun MainContent(
     collections: List<CollectionSummary>,
-    visibleBookmarks: List<Bookmark>,
+    bookmarks: List<Bookmark>,
     bookmarkCollectionIds: Map<String, List<String>>,
     collectionById: Map<String, CollectionSummary>,
-    selectedCollection: CollectionSummary?,
     selectedCollectionId: String?,
     supabaseConfigured: Boolean,
     session: SupabaseSession?,
@@ -596,6 +623,7 @@ private fun MainContent(
     snackbarHostState: SnackbarHostState,
     onBackFromCollection: () -> Unit,
     onOpenSearch: () -> Unit,
+    onOpenCollectionSearch: (String) -> Unit,
     onSyncClick: () -> Unit,
     onAccountClick: () -> Unit,
     onCreateCollection: () -> Unit,
@@ -605,97 +633,119 @@ private fun MainContent(
     onDeleteCollection: (CollectionSummary) -> Unit,
     onBookmarkMenu: (Bookmark) -> Unit,
 ) {
-    Scaffold(
-        containerColor = MaterialTheme.colorScheme.background,
-        snackbarHost = { SnackbarHost(snackbarHostState) },
-        topBar = {
-            TopAppBar(
-                navigationIcon = {
-                    if (selectedCollection != null) {
-                        IconButton(onClick = onBackFromCollection) {
-                            Icon(
-                                imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
-                                contentDescription = "返回",
+    val firstCoverByCollectionId = remember(collections, bookmarks, bookmarkCollectionIds) {
+        collections.associate { collection ->
+            val ids = bookmarkCollectionIds
+                .filterValues { collectionIds -> collection.id in collectionIds }
+                .keys
+            collection.id to bookmarks.firstOrNull { it.id in ids }?.coverUrl
+        }
+    }
+
+    AnimatedContent(
+        targetState = selectedCollectionId,
+        transitionSpec = {
+            if (targetState != null) {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                ) togetherWith slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Left,
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                )
+            } else {
+                slideIntoContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                ) togetherWith slideOutOfContainer(
+                    AnimatedContentTransitionScope.SlideDirection.Right,
+                    animationSpec = tween(PAGE_TRANSITION_DURATION_MS),
+                )
+            }.using(SizeTransform(clip = false))
+        },
+        label = "collection-page-transition",
+    ) { currentCollectionId ->
+        val inCollection = currentCollectionId != null
+        val currentCollection = collections.firstOrNull { it.id == currentCollectionId }
+        Scaffold(
+            containerColor = MaterialTheme.colorScheme.background,
+            snackbarHost = { SnackbarHost(snackbarHostState) },
+            topBar = {
+                TopAppBar(
+                    navigationIcon = {
+                        if (inCollection) {
+                            IconButton(onClick = onBackFromCollection) {
+                                Icon(
+                                    imageVector = Icons.AutoMirrored.Outlined.ArrowBack,
+                                    contentDescription = "返回",
+                                )
+                            }
+                        }
+                    },
+                    title = {
+                        Column {
+                            Text(
+                                text = currentCollection?.name ?: "码住",
+                                fontWeight = FontWeight.Bold,
+                            )
+                            Text(
+                                text = currentCollection?.let { "${it.articleCount} 篇文章" }
+                                    ?: "把值得看的文章先存下来",
+                                style = MaterialTheme.typography.labelMedium,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
                             )
                         }
-                    }
-                },
-                title = {
-                    Column {
-                        Text(
-                            text = selectedCollection?.name ?: "码住",
-                            fontWeight = FontWeight.Bold,
-                        )
-                        Text(
-                            text = selectedCollection?.let { "${it.articleCount} 篇文章" }
-                                ?: "把值得看的文章先存下来",
-                            style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                },
-                actions = {
-                    IconButton(onClick = onOpenSearch) {
-                        Icon(
-                            imageVector = Icons.Outlined.Search,
-                            contentDescription = "搜索",
-                        )
-                    }
-                    IconButton(onClick = onSyncClick) {
-                        Icon(
-                            imageVector = Icons.Outlined.CloudUpload,
-                            contentDescription = "同步",
-                        )
-                    }
-                    IconButton(onClick = onAccountClick) {
-                        Icon(
-                            imageVector = Icons.Outlined.AccountCircle,
-                            contentDescription = "账号",
-                        )
-                    }
-                },
-                colors = TopAppBarDefaults.topAppBarColors(
-                    containerColor = MaterialTheme.colorScheme.background,
-                ),
-            )
-        },
-        floatingActionButton = {
-            if (selectedCollectionId == null) {
-                FloatingActionButton(onClick = onCreateCollection) {
-                    Icon(
-                        imageVector = Icons.Outlined.Add,
-                        contentDescription = "新建收藏夹",
-                    )
-                }
-            }
-        },
-    ) { padding ->
-        AnimatedContent(
-            targetState = selectedCollectionId,
-            transitionSpec = {
-                if (targetState != null) {
-                    slideIntoContainer(
-                        AnimatedContentTransitionScope.SlideDirection.Left,
-                        animationSpec = tween(240),
-                    ) togetherWith slideOutOfContainer(
-                        AnimatedContentTransitionScope.SlideDirection.Left,
-                        animationSpec = tween(240),
-                    )
-                } else {
-                    slideIntoContainer(
-                        AnimatedContentTransitionScope.SlideDirection.Right,
-                        animationSpec = tween(240),
-                    ) togetherWith slideOutOfContainer(
-                        AnimatedContentTransitionScope.SlideDirection.Right,
-                        animationSpec = tween(240),
-                    )
-                }.using(SizeTransform(clip = false))
+                    },
+                    actions = {
+                        IconButton(
+                            onClick = {
+                                if (currentCollectionId == null) {
+                                    onOpenSearch()
+                                } else {
+                                    onOpenCollectionSearch(currentCollectionId)
+                                }
+                            },
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.Search,
+                                contentDescription = "搜索",
+                            )
+                        }
+                        if (!inCollection) {
+                            IconButton(onClick = onSyncClick) {
+                                Icon(
+                                    imageVector = Icons.Outlined.CloudUpload,
+                                    contentDescription = "同步",
+                                )
+                            }
+                            IconButton(onClick = onAccountClick) {
+                                Icon(
+                                    imageVector = Icons.Outlined.AccountCircle,
+                                    contentDescription = "账号",
+                                )
+                            }
+                        }
+                    },
+                    colors = TopAppBarDefaults.topAppBarColors(
+                        containerColor = MaterialTheme.colorScheme.background,
+                    ),
+                )
             },
-            label = "collection-transition",
-            modifier = Modifier.padding(padding),
-        ) { currentCollectionId ->
+            floatingActionButton = {
+                if (!inCollection) {
+                    FloatingActionButton(onClick = onCreateCollection) {
+                        Icon(
+                            imageVector = Icons.Outlined.Add,
+                            contentDescription = "新建收藏夹",
+                        )
+                    }
+                }
+            },
+        ) { padding ->
             LazyColumn(
-                modifier = Modifier.fillMaxSize(),
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
                 state = listState,
                 contentPadding = PaddingValues(
                     start = 16.dp,
@@ -705,7 +755,7 @@ private fun MainContent(
                 ),
                 verticalArrangement = Arrangement.spacedBy(12.dp),
             ) {
-                if (currentCollectionId == null) {
+                if (!inCollection) {
                     if (session == null) {
                         item {
                             LoginSyncBanner(
@@ -729,6 +779,7 @@ private fun MainContent(
                     ) { collection ->
                         CollectionCard(
                             collection = collection,
+                            coverUrl = firstCoverByCollectionId[collection.id],
                             onOpen = { onOpenCollection(collection.id) },
                             onRename = { onRenameCollection(collection) },
                             onDelete = { onDeleteCollection(collection) },
@@ -745,13 +796,22 @@ private fun MainContent(
                     }
                 }
 
-                if (visibleBookmarks.isEmpty()) {
+                val pageBookmarks = if (currentCollectionId == null) {
+                    bookmarks
+                } else {
+                    val ids = bookmarkCollectionIds
+                        .filterValues { collectionIds -> currentCollectionId in collectionIds }
+                        .keys
+                    bookmarks.filter { it.id in ids }
+                }
+
+                if (pageBookmarks.isEmpty()) {
                     item {
-                        EmptyState(inCollection = currentCollectionId != null)
+                        EmptyState(inCollection = inCollection)
                     }
                 } else {
                     items(
-                        items = visibleBookmarks,
+                        items = pageBookmarks,
                         key = Bookmark::id,
                     ) { bookmark ->
                         BookmarkRow(
@@ -775,6 +835,8 @@ private fun SearchPage(
     bookmarks: List<Bookmark>,
     bookmarkCollectionIds: Map<String, List<String>>,
     collectionById: Map<String, CollectionSummary>,
+    placeholder: String,
+    resultFooter: String,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -839,7 +901,7 @@ private fun SearchPage(
                             }
                         }
                     },
-                    placeholder = { Text("搜索收藏文章") },
+                    placeholder = { Text(placeholder) },
                     singleLine = true,
                     keyboardOptions = KeyboardOptions(imeAction = ImeAction.Search),
                     keyboardActions = KeyboardActions(
@@ -920,7 +982,7 @@ private fun SearchPage(
                     }
                     item {
                         Text(
-                            text = "以上为全部收藏文章的搜索结果",
+                            text = resultFooter,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                             modifier = Modifier
@@ -930,6 +992,55 @@ private fun SearchPage(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun RemoteCoverImage(
+    url: String?,
+    modifier: Modifier,
+    cornerRadius: Int,
+    fallback: @Composable () -> Unit = {
+        Icon(
+            imageVector = Icons.AutoMirrored.Outlined.Article,
+            contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary,
+            modifier = Modifier.padding(24.dp),
+        )
+    },
+) {
+    var image by remember(url) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    LaunchedEffect(url) {
+        image = null
+        val coverUrl = url?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        image = withContext(Dispatchers.IO) {
+            runCatching {
+                val connection = URL(coverUrl).openConnection().apply {
+                    connectTimeout = 8_000
+                    readTimeout = 8_000
+                }
+                connection.getInputStream().use { input ->
+                    BitmapFactory.decodeStream(input)?.asImageBitmap()
+                }
+            }.getOrNull()
+        }
+    }
+
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        shape = RoundedCornerShape(cornerRadius.dp),
+        modifier = modifier,
+    ) {
+        if (image != null) {
+            Image(
+                bitmap = image!!,
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
+        } else {
+            fallback()
         }
     }
 }
@@ -984,18 +1095,11 @@ private fun SearchResultRow(
             }
             .padding(vertical = 12.dp),
     ) {
-        Surface(
-            color = MaterialTheme.colorScheme.primaryContainer,
-            shape = RoundedCornerShape(10.dp),
+        RemoteCoverImage(
+            url = bookmark.coverUrl,
             modifier = Modifier.size(92.dp),
-        ) {
-            Icon(
-                imageVector = Icons.AutoMirrored.Outlined.Article,
-                contentDescription = null,
-                tint = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(26.dp),
-            )
-        }
+            cornerRadius = 10,
+        )
         Column(
             modifier = Modifier
                 .weight(1f)
@@ -1443,6 +1547,7 @@ private fun AccountDialog(
 @Composable
 private fun CollectionCard(
     collection: CollectionSummary,
+    coverUrl: String?,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -1465,19 +1570,21 @@ private fun CollectionCard(
                 .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Surface(
-                color = MaterialTheme.colorScheme.primaryContainer,
-                shape = RoundedCornerShape(12.dp),
-            ) {
-                Icon(
-                    imageVector = Icons.Outlined.Folder,
-                    contentDescription = null,
-                    tint = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier
-                        .padding(13.dp)
-                        .size(30.dp),
-                )
-            }
+            RemoteCoverImage(
+                url = coverUrl,
+                modifier = Modifier.size(58.dp),
+                cornerRadius = 12,
+                fallback = {
+                    Icon(
+                        imageVector = Icons.Outlined.Folder,
+                        contentDescription = null,
+                        tint = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier
+                            .padding(13.dp)
+                            .size(30.dp),
+                    )
+                },
+            )
 
             Column(
                 modifier = Modifier
@@ -1651,54 +1758,67 @@ private fun BookmarkRow(
         ),
         border = CardDefaults.outlinedCardBorder(),
     ) {
-        Column(
-            modifier = Modifier.padding(16.dp),
-        ) {
+        Column(modifier = Modifier.padding(16.dp)) {
             Row(verticalAlignment = Alignment.Top) {
-                Text(
-                    text = bookmark.title,
-                    style = MaterialTheme.typography.titleSmall,
-                    fontWeight = FontWeight.SemiBold,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f),
+                RemoteCoverImage(
+                    url = bookmark.coverUrl,
+                    modifier = Modifier.size(82.dp),
+                    cornerRadius = 12,
                 )
-                IconButton(
-                    onClick = onMenu,
-                    modifier = Modifier.size(36.dp),
+                Column(
+                    modifier = Modifier
+                        .weight(1f)
+                        .padding(start = 12.dp),
                 ) {
-                    Icon(
-                        imageVector = Icons.Outlined.MoreVert,
-                        contentDescription = "文章操作",
-                        modifier = Modifier.size(20.dp),
+                    Row(verticalAlignment = Alignment.Top) {
+                        Text(
+                            text = bookmark.title,
+                            style = MaterialTheme.typography.titleSmall,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.weight(1f),
+                        )
+                        IconButton(
+                            onClick = onMenu,
+                            modifier = Modifier.size(36.dp),
+                        ) {
+                            Icon(
+                                imageVector = Icons.Outlined.MoreVert,
+                                contentDescription = "文章操作",
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+                    }
+                    Spacer(Modifier.height(6.dp))
+                    Text(
+                        text = bookmark.originalUrl,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
                     )
+                    bookmark.accountName?.takeIf(String::isNotBlank)?.let { accountName ->
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = accountName,
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    if (collectionNames.isNotEmpty()) {
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = collectionNames.joinToString(" · "),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
                 }
-            }
-            Spacer(Modifier.height(8.dp))
-            Text(
-                text = bookmark.originalUrl,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-            )
-            bookmark.accountName?.takeIf(String::isNotBlank)?.let { accountName ->
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = accountName,
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.primary,
-                )
-            }
-            if (collectionNames.isNotEmpty()) {
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = collectionNames.joinToString(" · "),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
             }
             Spacer(Modifier.height(14.dp))
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)

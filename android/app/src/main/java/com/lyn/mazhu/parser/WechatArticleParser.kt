@@ -40,10 +40,7 @@ class WechatArticleParser {
             ?.trim()
             ?.takeIf(String::isNotBlank)
 
-        val coverUrl = document.selectFirst("meta[property=og:image]")
-            ?.attr("content")
-            ?.trim()
-            ?.takeIf(String::isNotBlank)
+        val coverUrl = extractCoverUrl(document)
 
         val contentHtml = extractContentHtml(document, html)
         val contentText = htmlToReadableText(contentHtml)
@@ -75,6 +72,31 @@ class WechatArticleParser {
 
         return decodeJavaScriptString(encodedContent)
     }
+
+    private fun extractCoverUrl(document: Document): String? {
+        val candidates = listOfNotNull(
+            document.selectFirst("meta[property=og:image]")?.attr("content"),
+            document.selectFirst("meta[name=twitter:image]")?.attr("content"),
+            document.selectFirst("meta[property=twitter:image]")?.attr("content"),
+            document.selectFirst("#js_content img[data-src]")?.attr("data-src"),
+            document.selectFirst("#js_content img[src]")?.attr("src"),
+            document.selectFirst("img[data-src]")?.attr("data-src"),
+            document.selectFirst("img[src]")?.attr("src"),
+        )
+        return candidates
+            .asSequence()
+            .map(String::trim)
+            .filter(String::isNotBlank)
+            .map(::normalizeImageUrl)
+            .firstOrNull { it.startsWith("http://") || it.startsWith("https://") }
+    }
+
+    private fun normalizeImageUrl(url: String): String =
+        when {
+            url.startsWith("//") -> "https:$url"
+            url.startsWith("http://") || url.startsWith("https://") -> url
+            else -> url
+        }
 
     private fun htmlToReadableText(contentHtml: String): String {
         val body = Jsoup.parseBodyFragment(contentHtml).body()
