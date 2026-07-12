@@ -15,6 +15,7 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
@@ -95,6 +96,7 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -126,7 +128,13 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private const val PAGE_TRANSITION_DURATION_MS = 360
+private const val PAGE_TRANSITION_DURATION_MS = 300
+private const val COVER_FADE_DURATION_MS = 220
+private const val SEARCH_KEYBOARD_DELAY_MS = 60L
+
+private object CoverImageMemoryCache {
+    val images = mutableMapOf<String, ImageBitmap>()
+}
 
 private enum class CollectionPickerMode {
     MOVE,
@@ -724,6 +732,8 @@ private fun MainContent(
                                     contentDescription = "账号",
                                 )
                             }
+                        } else {
+                            Spacer(Modifier.size(12.dp))
                         }
                     },
                     colors = TopAppBarDefaults.topAppBarColors(
@@ -870,7 +880,7 @@ private fun SearchPage(
     BackHandler(onBack = onDismiss)
 
     LaunchedEffect(Unit) {
-        delay(220)
+        delay(SEARCH_KEYBOARD_DELAY_MS)
         focusRequester.requestFocus()
         keyboardController?.show()
     }
@@ -1010,10 +1020,16 @@ private fun RemoteCoverImage(
         )
     },
 ) {
-    var image by remember(url) { mutableStateOf<androidx.compose.ui.graphics.ImageBitmap?>(null) }
+    var image by remember(url) {
+        mutableStateOf(url?.let { CoverImageMemoryCache.images[it] })
+    }
     LaunchedEffect(url) {
-        image = null
         val coverUrl = url?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
+        CoverImageMemoryCache.images[coverUrl]?.let { cachedImage ->
+            image = cachedImage
+            return@LaunchedEffect
+        }
+        image = null
         image = withContext(Dispatchers.IO) {
             runCatching {
                 val connection = URL(coverUrl).openConnection().apply {
@@ -1025,6 +1041,7 @@ private fun RemoteCoverImage(
                 }
             }.getOrNull()
         }
+        image?.let { CoverImageMemoryCache.images[coverUrl] = it }
     }
 
     Surface(
@@ -1032,15 +1049,21 @@ private fun RemoteCoverImage(
         shape = RoundedCornerShape(cornerRadius.dp),
         modifier = modifier,
     ) {
-        if (image != null) {
-            Image(
-                bitmap = image!!,
-                contentDescription = null,
-                contentScale = ContentScale.Crop,
-                modifier = Modifier.fillMaxSize(),
-            )
-        } else {
-            fallback()
+        Crossfade(
+            targetState = image,
+            animationSpec = tween(COVER_FADE_DURATION_MS),
+            label = "cover-fade",
+        ) { loadedImage ->
+            if (loadedImage != null) {
+                Image(
+                    bitmap = loadedImage,
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize(),
+                )
+            } else {
+                fallback()
+            }
         }
     }
 }
