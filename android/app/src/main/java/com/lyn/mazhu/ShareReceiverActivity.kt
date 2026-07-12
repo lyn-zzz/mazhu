@@ -83,16 +83,18 @@ class ShareReceiverActivity : ComponentActivity() {
                     showCollectionPicker(
                         bookmarkId = result.bookmarkId,
                         collections = repository.getCollections(),
+                        selectedCollectionIds = repository.getBookmarkCollectionIds(result.bookmarkId),
+                        alreadySaved = false,
                     )
                 }
 
-                SaveResult.AlreadySaved -> {
-                    Toast.makeText(
-                        this@ShareReceiverActivity,
-                        "这篇文章已经码住了",
-                        Toast.LENGTH_SHORT,
-                    ).show()
-                    finishAndRemoveTask()
+                is SaveResult.AlreadySaved -> {
+                    showCollectionPicker(
+                        bookmarkId = result.bookmarkId,
+                        collections = repository.getCollections(),
+                        selectedCollectionIds = repository.getBookmarkCollectionIds(result.bookmarkId),
+                        alreadySaved = true,
+                    )
                 }
 
                 SaveResult.InvalidShare -> {
@@ -110,18 +112,22 @@ class ShareReceiverActivity : ComponentActivity() {
     private fun showCollectionPicker(
         bookmarkId: String,
         collections: List<Collection>,
+        selectedCollectionIds: List<String>,
+        alreadySaved: Boolean,
     ) {
         setContent {
             MazhuTheme {
                 ShareCollectionPicker(
                     collections = collections,
-                    onSelect = { collection ->
+                    initiallySelectedIds = selectedCollectionIds.toSet(),
+                    alreadySaved = alreadySaved,
+                    onConfirm = { collectionIds ->
                         lifecycleScope.launch {
-                            repository.moveBookmark(bookmarkId, collection.id)
+                            repository.addBookmarkToCollections(bookmarkId, collectionIds)
                             SyncWorkScheduler.enqueue(this@ShareReceiverActivity)
                             Toast.makeText(
                                 this@ShareReceiverActivity,
-                                "已保存到${collection.name}",
+                                "已保存到 ${collectionIds.size} 个收藏夹",
                                 Toast.LENGTH_SHORT,
                             ).show()
                             finishAndRemoveTask()
@@ -131,36 +137,18 @@ class ShareReceiverActivity : ComponentActivity() {
                         lifecycleScope.launch {
                             when (val result = repository.createCollection(name)) {
                                 is CreateCollectionResult.Created -> {
-                                    repository.moveBookmark(
-                                        bookmarkId = bookmarkId,
-                                        collectionId = result.collection.id,
-                                    )
-                                    SyncWorkScheduler.enqueue(this@ShareReceiverActivity)
-                                    Toast.makeText(
-                                        this@ShareReceiverActivity,
-                                        "已保存到${result.collection.name}",
-                                        Toast.LENGTH_SHORT,
-                                    ).show()
-                                    finishAndRemoveTask()
+                                    onResult(null, result.collection)
                                 }
 
                                 CreateCollectionResult.InvalidName -> {
-                                    onResult("收藏夹名称不能为空")
+                                    onResult("收藏夹名称不能为空", null)
                                 }
 
                                 CreateCollectionResult.NameAlreadyExists -> {
-                                    onResult("已经有同名收藏夹")
+                                    onResult("已经有同名收藏夹", null)
                                 }
                             }
                         }
-                    },
-                    onKeepDefault = {
-                        Toast.makeText(
-                            this@ShareReceiverActivity,
-                            "已保存到默认收藏夹",
-                            Toast.LENGTH_SHORT,
-                        ).show()
-                        finishAndRemoveTask()
                     },
                 )
             }
@@ -200,12 +188,24 @@ private fun SavingScreen() {
 @Composable
 private fun ShareCollectionPicker(
     collections: List<Collection>,
-    onSelect: (Collection) -> Unit,
-    onCreate: (String, (String) -> Unit) -> Unit,
-    onKeepDefault: () -> Unit,
+    initiallySelectedIds: Set<String>,
+    alreadySaved: Boolean,
+    onConfirm: (List<String>) -> Unit,
+    onCreate: (String, (String?, Collection?) -> Unit) -> Unit,
 ) {
     var showCreateDialog by remember { mutableStateOf(false) }
     var createError by remember { mutableStateOf<String?>(null) }
+    var createdCollections by remember { mutableStateOf(emptyList<Collection>()) }
+    var selectedIds by remember(initiallySelectedIds) {
+        mutableStateOf(
+            if (initiallySelectedIds.isEmpty()) {
+                setOf(BookmarkRepository.DEFAULT_COLLECTION_ID)
+            } else {
+                initiallySelectedIds
+            },
+        )
+    }
+    val allCollections = collections + createdCollections
 
     Scaffold(
         topBar = {
@@ -217,7 +217,11 @@ private fun ShareCollectionPicker(
                             fontWeight = FontWeight.Bold,
                         )
                         Text(
-                            text = "文章已先保存在默认收藏夹",
+                            text = if (alreadySaved) {
+                                "这篇文章已经码住了，可继续添加到其他收藏夹"
+                            } else {
+                                "可同时选择多个收藏夹"
+                            },
                             style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
@@ -261,17 +265,18 @@ private fun ShareCollectionPicker(
             }
 
             items(
-                items = collections,
+                items = allCollections,
                 key = Collection::id,
             ) { collection ->
+                val selected = collection.id in selectedIds
                 Card(
                     modifier = Modifier
                         .fillMaxWidth()
                         .clickable {
-                            if (collection.id == BookmarkRepository.DEFAULT_COLLECTION_ID) {
-                                onKeepDefault()
+                            selectedIds = if (selected) {
+                                selectedIds - collection.id
                             } else {
-                                onSelect(collection)
+                                selectedIds + collection.id
                             }
                         },
                     shape = RoundedCornerShape(14.dp),
@@ -295,14 +300,24 @@ private fun ShareCollectionPicker(
                                 .weight(1f)
                                 .padding(start = 14.dp),
                         )
-                        if (collection.id == BookmarkRepository.DEFAULT_COLLECTION_ID) {
+                        if (selected) {
                             Icon(
                                 imageVector = Icons.Outlined.Check,
-                                contentDescription = "当前收藏夹",
+                                contentDescription = "已选择",
                                 tint = MaterialTheme.colorScheme.primary,
                             )
                         }
                     }
+                }
+            }
+
+            item {
+                TextButton(
+                    onClick = { onConfirm(selectedIds.toList()) },
+                    enabled = selectedIds.isNotEmpty(),
+                    modifier = Modifier.fillMaxWidth(),
+                ) {
+                    Text("完成，保存到 ${selectedIds.size} 个收藏夹")
                 }
             }
         }
@@ -341,13 +356,22 @@ private fun ShareCollectionPicker(
             confirmButton = {
                 TextButton(
                     onClick = {
-                        onCreate(name) { error ->
-                            createError = error
+                        onCreate(name) { error, collection ->
+                            if (error != null) {
+                                createError = error
+                                return@onCreate
+                            }
+                            if (collection != null) {
+                                createdCollections = createdCollections + collection
+                                selectedIds = selectedIds + collection.id
+                                showCreateDialog = false
+                                createError = null
+                            }
                         }
                     },
                     enabled = name.isNotBlank(),
                 ) {
-                    Text("创建并保存")
+                    Text("创建")
                 }
             },
             dismissButton = {

@@ -8,8 +8,8 @@ import androidx.room.RoomDatabase
 import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
-    entities = [Bookmark::class, Collection::class, PendingDeletion::class],
-    version = 4,
+    entities = [Bookmark::class, Collection::class, BookmarkCollection::class, PendingDeletion::class],
+    version = 5,
     exportSchema = false,
 )
 abstract class BookmarkDatabase : RoomDatabase() {
@@ -22,7 +22,7 @@ abstract class BookmarkDatabase : RoomDatabase() {
                 BookmarkDatabase::class.java,
                 "mazhu.db",
             )
-                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4)
+                .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -150,6 +150,59 @@ abstract class BookmarkDatabase : RoomDatabase() {
                         createdAt INTEGER NOT NULL,
                         PRIMARY KEY(key)
                     )
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        private val MIGRATION_4_5 = object : Migration(4, 5) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    CREATE TABLE IF NOT EXISTS bookmark_collections (
+                        bookmarkId TEXT NOT NULL,
+                        collectionId TEXT NOT NULL,
+                        syncStatus TEXT NOT NULL,
+                        syncError TEXT,
+                        createdAt INTEGER NOT NULL,
+                        PRIMARY KEY(bookmarkId, collectionId),
+                        FOREIGN KEY(bookmarkId)
+                            REFERENCES bookmarks(id)
+                            ON DELETE CASCADE,
+                        FOREIGN KEY(collectionId)
+                            REFERENCES collections(id)
+                            ON DELETE CASCADE
+                    )
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS index_bookmark_collections_bookmarkId
+                    ON bookmark_collections(bookmarkId)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    CREATE INDEX IF NOT EXISTS index_bookmark_collections_collectionId
+                    ON bookmark_collections(collectionId)
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    INSERT OR IGNORE INTO bookmark_collections(
+                        bookmarkId,
+                        collectionId,
+                        syncStatus,
+                        syncError,
+                        createdAt
+                    )
+                    SELECT
+                        id,
+                        collectionId,
+                        syncStatus,
+                        syncError,
+                        createdAt
+                    FROM bookmarks
                     """.trimIndent(),
                 )
             }

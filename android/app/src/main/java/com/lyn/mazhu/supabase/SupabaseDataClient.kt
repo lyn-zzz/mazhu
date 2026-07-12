@@ -2,6 +2,7 @@ package com.lyn.mazhu.supabase
 
 import android.net.Uri
 import com.lyn.mazhu.data.Bookmark
+import com.lyn.mazhu.data.BookmarkCollection
 import com.lyn.mazhu.data.Collection
 import java.time.Instant
 import org.json.JSONArray
@@ -58,6 +59,24 @@ class SupabaseDataClient(
         )
     }
 
+    suspend fun upsertBookmarkCollection(
+        session: SupabaseSession,
+        relation: BookmarkCollection,
+    ) {
+        val body = JSONObject()
+            .put("user_id", session.userId)
+            .put("bookmark_id", relation.bookmarkId)
+            .put("collection_id", relation.collectionId)
+            .put("created_at", Instant.ofEpochMilli(relation.createdAt).toString())
+        httpClient.request(
+            path = "/rest/v1/bookmark_collections?on_conflict=user_id,bookmark_id,collection_id",
+            method = "POST",
+            accessToken = session.accessToken,
+            body = JSONArray().put(body).toString(),
+            prefer = "resolution=merge-duplicates,return=minimal",
+        )
+    }
+
     suspend fun deleteCollection(
         session: SupabaseSession,
         collectionId: String,
@@ -66,6 +85,36 @@ class SupabaseDataClient(
         val id = Uri.encode(collectionId)
         httpClient.request(
             path = "/rest/v1/collections?user_id=eq.$userId&id=eq.$id",
+            method = "DELETE",
+            accessToken = session.accessToken,
+            prefer = "return=minimal",
+        )
+    }
+
+    suspend fun deleteBookmark(
+        session: SupabaseSession,
+        bookmarkId: String,
+    ) {
+        val userId = Uri.encode(session.userId)
+        val id = Uri.encode(bookmarkId)
+        httpClient.request(
+            path = "/rest/v1/bookmarks?user_id=eq.$userId&id=eq.$id",
+            method = "DELETE",
+            accessToken = session.accessToken,
+            prefer = "return=minimal",
+        )
+    }
+
+    suspend fun deleteBookmarkCollection(
+        session: SupabaseSession,
+        bookmarkId: String,
+        collectionId: String,
+    ) {
+        val userId = Uri.encode(session.userId)
+        val encodedBookmarkId = Uri.encode(bookmarkId)
+        val encodedCollectionId = Uri.encode(collectionId)
+        httpClient.request(
+            path = "/rest/v1/bookmark_collections?user_id=eq.$userId&bookmark_id=eq.$encodedBookmarkId&collection_id=eq.$encodedCollectionId",
             method = "DELETE",
             accessToken = session.accessToken,
             prefer = "return=minimal",

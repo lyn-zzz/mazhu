@@ -50,9 +50,38 @@ class SyncWorker(
                 )
             }
 
+            dao.getPendingBookmarkCollections().forEach { relation ->
+                dao.updateBookmarkCollectionSyncState(
+                    bookmarkId = relation.bookmarkId,
+                    collectionId = relation.collectionId,
+                    status = BookmarkStatus.SYNC_SYNCING,
+                    error = null,
+                )
+                client.upsertBookmarkCollection(session, relation)
+                dao.updateBookmarkCollectionSyncState(
+                    bookmarkId = relation.bookmarkId,
+                    collectionId = relation.collectionId,
+                    status = BookmarkStatus.SYNC_SYNCED,
+                    error = null,
+                )
+            }
+
             dao.getPendingDeletions().forEach { deletion ->
                 if (deletion.entityType == PendingDeletion.TYPE_COLLECTION) {
                     client.deleteCollection(session, deletion.entityId)
+                }
+                if (deletion.entityType == PendingDeletion.TYPE_BOOKMARK) {
+                    client.deleteBookmark(session, deletion.entityId)
+                }
+                if (deletion.entityType == PendingDeletion.TYPE_BOOKMARK_COLLECTION) {
+                    val parts = deletion.entityId.split(":", limit = 2)
+                    if (parts.size == 2) {
+                        client.deleteBookmarkCollection(
+                            session = session,
+                            bookmarkId = parts[0],
+                            collectionId = parts[1],
+                        )
+                    }
                 }
                 dao.deletePendingDeletion(deletion.key)
             }
@@ -84,6 +113,16 @@ class SyncWorker(
             .forEach { bookmark ->
                 dao.updateBookmarkSyncState(
                     bookmarkId = bookmark.id,
+                    status = BookmarkStatus.SYNC_LOCAL_ONLY,
+                    error = error,
+                )
+            }
+        dao.getPendingBookmarkCollections()
+            .filter { it.syncStatus == BookmarkStatus.SYNC_SYNCING }
+            .forEach { relation ->
+                dao.updateBookmarkCollectionSyncState(
+                    bookmarkId = relation.bookmarkId,
+                    collectionId = relation.collectionId,
                     status = BookmarkStatus.SYNC_LOCAL_ONLY,
                     error = error,
                 )

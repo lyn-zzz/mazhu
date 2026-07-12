@@ -11,8 +11,31 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks ORDER BY createdAt DESC")
     fun observeAll(): Flow<List<Bookmark>>
 
-    @Query("SELECT * FROM bookmarks WHERE collectionId = :collectionId ORDER BY createdAt DESC")
+    @Query("SELECT * FROM bookmark_collections")
+    fun observeBookmarkCollections(): Flow<List<BookmarkCollection>>
+
+    @Query(
+        """
+        SELECT bookmarks.* FROM bookmarks
+        INNER JOIN bookmark_collections
+            ON bookmark_collections.bookmarkId = bookmarks.id
+        WHERE bookmark_collections.collectionId = :collectionId
+        ORDER BY bookmarks.createdAt DESC
+        """,
+    )
     fun observeByCollection(collectionId: String): Flow<List<Bookmark>>
+
+    @Query(
+        """
+        SELECT * FROM bookmarks
+        WHERE title LIKE '%' || :query || '%'
+            OR originalUrl LIKE '%' || :query || '%'
+            OR accountName LIKE '%' || :query || '%'
+            OR contentText LIKE '%' || :query || '%'
+        ORDER BY createdAt DESC
+        """,
+    )
+    fun searchBookmarks(query: String): Flow<List<Bookmark>>
 
     @Query(
         """
@@ -20,13 +43,19 @@ interface BookmarkDao {
             collections.id AS id,
             collections.name AS name,
             collections.createdAt AS createdAt,
-            COUNT(bookmarks.id) AS articleCount,
+            COUNT(DISTINCT bookmark_collections.bookmarkId) AS articleCount,
             COALESCE(
-                SUM(CASE WHEN bookmarks.syncStatus != 'synced' THEN 1 ELSE 0 END),
+                SUM(
+                    CASE
+                        WHEN bookmark_collections.syncStatus != 'synced' THEN 1
+                        ELSE 0
+                    END
+                ),
                 0
             ) AS unsyncedCount
         FROM collections
-        LEFT JOIN bookmarks ON bookmarks.collectionId = collections.id
+        LEFT JOIN bookmark_collections
+            ON bookmark_collections.collectionId = collections.id
         GROUP BY collections.id, collections.name, collections.createdAt
         ORDER BY
             CASE WHEN collections.id = 'default' THEN 0 ELSE 1 END,
@@ -51,6 +80,15 @@ interface BookmarkDao {
     @Query("SELECT * FROM bookmarks WHERE syncStatus != 'synced' ORDER BY createdAt ASC")
     suspend fun getPendingBookmarks(): List<Bookmark>
 
+    @Query(
+        """
+        SELECT * FROM bookmark_collections
+        WHERE syncStatus != 'synced'
+        ORDER BY createdAt ASC
+        """,
+    )
+    suspend fun getPendingBookmarkCollections(): List<BookmarkCollection>
+
     @Query("SELECT * FROM pending_deletions ORDER BY createdAt ASC")
     suspend fun getPendingDeletions(): List<PendingDeletion>
 
@@ -71,30 +109,55 @@ interface BookmarkDao {
     @Query("DELETE FROM collections WHERE id = :collectionId")
     suspend fun deleteCollection(collectionId: String)
 
-    @Query(
-        """
-        UPDATE bookmarks
-        SET collectionId = :collectionId,
-            syncStatus = 'local_only',
-            syncError = NULL
-        WHERE id = :bookmarkId
-        """,
-    )
-    suspend fun moveBookmark(bookmarkId: String, collectionId: String)
+    @Insert(onConflict = OnConflictStrategy.IGNORE)
+    suspend fun insertBookmarkCollection(relation: BookmarkCollection): Long
 
     @Query(
         """
-        UPDATE bookmarks
-        SET collectionId = :targetCollectionId,
-            syncStatus = 'local_only',
+        UPDATE bookmark_collections
+        SET syncStatus = :status,
             syncError = NULL
-        WHERE collectionId = :sourceCollectionId
+        WHERE bookmarkId = :bookmarkId AND collectionId = :collectionId
         """,
     )
-    suspend fun moveAllBookmarks(
-        sourceCollectionId: String,
-        targetCollectionId: String,
+    suspend fun updateBookmarkCollectionSyncStatus(
+        bookmarkId: String,
+        collectionId: String,
+        status: String,
     )
+
+    @Query(
+        """
+        UPDATE bookmark_collections
+        SET syncStatus = :status,
+            syncError = :error
+        WHERE bookmarkId = :bookmarkId AND collectionId = :collectionId
+        """,
+    )
+    suspend fun updateBookmarkCollectionSyncState(
+        bookmarkId: String,
+        collectionId: String,
+        status: String,
+        error: String?,
+    )
+
+    @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId AND collectionId = :collectionId")
+    suspend fun deleteBookmarkCollection(bookmarkId: String, collectionId: String)
+
+    @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
+    suspend fun deleteBookmarkCollections(bookmarkId: String)
+
+    @Query("SELECT COUNT(*) FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
+    suspend fun countBookmarkCollections(bookmarkId: String): Int
+
+    @Query("SELECT collectionId FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
+    suspend fun getBookmarkCollectionIds(bookmarkId: String): List<String>
+
+    @Query("SELECT bookmarkId FROM bookmark_collections WHERE collectionId = :collectionId")
+    suspend fun getBookmarkIdsInCollection(collectionId: String): List<String>
+
+    @Query("DELETE FROM bookmarks WHERE id = :bookmarkId")
+    suspend fun deleteBookmark(bookmarkId: String)
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPendingDeletion(deletion: PendingDeletion)
@@ -132,6 +195,9 @@ interface BookmarkDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(bookmark: Bookmark): Long
+
+    @Query("SELECT * FROM bookmarks WHERE normalizedUrl = :normalizedUrl LIMIT 1")
+    suspend fun findByNormalizedUrl(normalizedUrl: String): Bookmark?
 
     @Query("SELECT * FROM bookmarks WHERE id = :bookmarkId LIMIT 1")
     suspend fun findById(bookmarkId: String): Bookmark?

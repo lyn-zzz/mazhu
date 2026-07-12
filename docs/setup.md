@@ -55,6 +55,7 @@ SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
 ```text
 supabase/migrations/0001_create_core_schema.sql
 supabase/migrations/0002_add_summary_fields.sql
+supabase/migrations/0003_add_bookmark_collections.sql
 ```
 
 数据库使用 Supabase Auth 的用户 ID 做隔离，并启用 RLS。每个登录用户只能读写自己的收藏夹和文章。

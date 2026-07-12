@@ -63,6 +63,11 @@ type BookmarkRow = {
   content_quality_error?: string | null;
 };
 
+type BookmarkCollectionRow = {
+  bookmark_id: string;
+  collection_id: string;
+};
+
 type CollectionWithCount = CollectionRow & {
   article_count: number;
 };
@@ -258,16 +263,10 @@ async function listCollections(config: AppConfig) {
       accessToken: session.accessToken,
     },
   );
-  const bookmarks = await requestJson<Pick<BookmarkRow, "collection_id">[]>(
-    config,
-    "/rest/v1/bookmarks?select=collection_id",
-    {
-      accessToken: session.accessToken,
-    },
-  );
+  const relations = await getBookmarkCollectionRows(config, session);
   const counts = new Map<string, number>();
-  for (const bookmark of bookmarks) {
-    counts.set(bookmark.collection_id, (counts.get(bookmark.collection_id) ?? 0) + 1);
+  for (const relation of relations) {
+    counts.set(relation.collection_id, (counts.get(relation.collection_id) ?? 0) + 1);
   }
   const rows: CollectionWithCount[] = collections.map((collection) => ({
     ...collection,
@@ -294,6 +293,8 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
     },
   );
   const collectionById = new Map(collections.map((item) => [item.id, item]));
+  const relations = await getBookmarkCollectionRows(config, session);
+  const collectionIdsByBookmarkId = groupCollectionIdsByBookmarkId(relations);
   const collectionFilter = collection
     ? collections.find((item) => item.name === collection || item.id === collection)
     : undefined;
@@ -309,9 +310,6 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
   );
   params.set("order", "created_at.desc");
   params.set("limit", "1000");
-  if (collectionFilter) {
-    params.set("collection_id", `eq.${collectionFilter.id}`);
-  }
 
   const allBookmarks = await requestJson<BookmarkRow[]>(
     config,
@@ -323,15 +321,25 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
   const normalizedQuery = query.toLocaleLowerCase();
   const bookmarks = allBookmarks
     .filter((bookmark) => {
+      if (!collectionFilter) {
+        return true;
+      }
+      return collectionIdsByBookmarkId.get(bookmark.id)?.includes(collectionFilter.id) ?? false;
+    })
+    .filter((bookmark) => {
       if (!normalizedQuery) {
         return true;
       }
-      const collectionName = collectionById.get(bookmark.collection_id)?.name ?? "";
+      const collectionNames = getCollectionNames(
+        bookmark,
+        collectionIdsByBookmarkId,
+        collectionById,
+      );
       return [
         bookmark.title,
         bookmark.account_name ?? "",
         bookmark.original_url,
-        collectionName,
+        ...collectionNames,
         bookmark.ai_summary ?? "",
         ...(bookmark.ai_topics ?? []),
       ].some((value) => value.toLocaleLowerCase().includes(normalizedQuery));
@@ -343,8 +351,12 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
     return;
   }
   for (const bookmark of bookmarks) {
-    const collectionName = collectionById.get(bookmark.collection_id)?.name ?? bookmark.collection_id;
-    console.log(`${bookmark.id.slice(0, 8)}\t[${collectionName}]\t${bookmark.title}`);
+    const collectionNames = getCollectionNames(
+      bookmark,
+      collectionIdsByBookmarkId,
+      collectionById,
+    );
+    console.log(`${bookmark.id.slice(0, 8)}\t[${collectionNames.join(" / ")}]\t${bookmark.title}`);
     console.log(`  ${bookmark.account_name ?? "未知公众号"} · ${bookmark.original_url}`);
     if (bookmark.ai_summary) {
       console.log(`  摘要：${bookmark.ai_summary}`);
@@ -352,6 +364,41 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
       console.log(`  摘要：${bookmark.summary_status === "failed" ? "生成失败" : "未生成"}`);
     }
   }
+}
+
+async function getBookmarkCollectionRows(
+  config: AppConfig,
+  session: Session,
+): Promise<BookmarkCollectionRow[]> {
+  return requestJson<BookmarkCollectionRow[]>(
+    config,
+    "/rest/v1/bookmark_collections?select=bookmark_id,collection_id",
+    {
+      accessToken: session.accessToken,
+    },
+  );
+}
+
+function groupCollectionIdsByBookmarkId(
+  relations: BookmarkCollectionRow[],
+): Map<string, string[]> {
+  const grouped = new Map<string, string[]>();
+  for (const relation of relations) {
+    grouped.set(
+      relation.bookmark_id,
+      [...(grouped.get(relation.bookmark_id) ?? []), relation.collection_id],
+    );
+  }
+  return grouped;
+}
+
+function getCollectionNames(
+  bookmark: BookmarkRow,
+  collectionIdsByBookmarkId: Map<string, string[]>,
+  collectionById: Map<string, CollectionRow>,
+): string[] {
+  const collectionIds = collectionIdsByBookmarkId.get(bookmark.id) ?? [bookmark.collection_id];
+  return collectionIds.map((id) => collectionById.get(id)?.name ?? id);
 }
 
 async function readBookmark(config: AppConfig, args: string[]) {
@@ -522,7 +569,14 @@ async function getSummarizeTargets(
   }
   if (options.collection) {
     const collection = await findCollection(config, session, options.collection);
-    params.set("collection_id", `eq.${collection.id}`);
+    const relations = await getBookmarkCollectionRows(config, session);
+    const bookmarkIds = relations
+      .filter((relation) => relation.collection_id === collection.id)
+      .map((relation) => relation.bookmark_id);
+    if (bookmarkIds.length === 0) {
+      return [];
+    }
+    params.set("id", `in.(${bookmarkIds.map(encodeURIComponent).join(",")})`);
   }
   if (!options.all && !options.collection) {
     params.set("summary_status", "neq.success");

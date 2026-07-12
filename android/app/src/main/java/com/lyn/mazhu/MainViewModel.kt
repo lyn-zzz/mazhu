@@ -4,12 +4,14 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.lyn.mazhu.data.Bookmark
+import com.lyn.mazhu.data.BookmarkCollection
 import com.lyn.mazhu.data.CollectionSummary
 import com.lyn.mazhu.data.CreateCollectionResult
 import com.lyn.mazhu.data.RenameCollectionResult
 import com.lyn.mazhu.supabase.AuthResult
 import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
+import com.lyn.mazhu.worker.ParseWorkScheduler
 import com.lyn.mazhu.worker.SyncWorkScheduler
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -39,6 +41,14 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             initialValue = emptyList(),
         )
 
+    val bookmarkCollections: StateFlow<List<BookmarkCollection>> =
+        repository.observeBookmarkCollections()
+            .stateIn(
+                scope = viewModelScope,
+                started = SharingStarted.WhileSubscribed(5_000),
+                initialValue = emptyList(),
+            )
+
     fun createCollection(
         name: String,
         onResult: (CreateCollectionResult) -> Unit,
@@ -46,6 +56,20 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             onResult(repository.createCollection(name))
             SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun saveSharedText(
+        sharedText: String,
+        onResult: (com.lyn.mazhu.data.SaveResult) -> Unit,
+    ) {
+        viewModelScope.launch {
+            val result = repository.saveSharedText(sharedText)
+            if (result is com.lyn.mazhu.data.SaveResult.Saved) {
+                ParseWorkScheduler.enqueue(app, result.bookmarkId)
+                SyncWorkScheduler.enqueue(app)
+            }
+            onResult(result)
         }
     }
 
@@ -71,12 +95,41 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    fun moveBookmark(
+    fun copyBookmarkToCollections(
         bookmarkId: String,
-        collectionId: String,
+        collectionIds: List<String>,
     ) {
         viewModelScope.launch {
-            repository.moveBookmark(bookmarkId, collectionId)
+            repository.addBookmarkToCollections(bookmarkId, collectionIds)
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun moveBookmarkFromCollection(
+        bookmarkId: String,
+        fromCollectionId: String?,
+        toCollectionIds: List<String>,
+    ) {
+        viewModelScope.launch {
+            repository.moveBookmarkFromCollection(
+                bookmarkId = bookmarkId,
+                fromCollectionId = fromCollectionId,
+                toCollectionIds = toCollectionIds,
+            )
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun removeBookmarkFromCollection(
+        bookmarkId: String,
+        collectionId: String?,
+    ) {
+        viewModelScope.launch {
+            if (collectionId == null) {
+                repository.deleteBookmarkCompletely(bookmarkId)
+            } else {
+                repository.removeBookmarkFromCollection(bookmarkId, collectionId)
+            }
             SyncWorkScheduler.enqueue(app)
         }
     }

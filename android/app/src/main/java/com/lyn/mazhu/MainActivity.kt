@@ -1,5 +1,8 @@
 package com.lyn.mazhu
 
+import android.content.ClipData
+import android.content.ClipboardManager
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
@@ -20,20 +23,22 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.outlined.Article
 import androidx.compose.material.icons.automirrored.outlined.ArrowBack
-import androidx.compose.material.icons.automirrored.outlined.DriveFileMove
 import androidx.compose.material.icons.outlined.Add
 import androidx.compose.material.icons.outlined.AccountCircle
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.ContentCopy
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.Edit
 import androidx.compose.material.icons.outlined.Folder
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Search
 import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Card
@@ -57,6 +62,7 @@ import androidx.compose.material3.TextField
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -77,6 +83,8 @@ import com.lyn.mazhu.data.BookmarkRepository
 import com.lyn.mazhu.data.CollectionSummary
 import com.lyn.mazhu.data.CreateCollectionResult
 import com.lyn.mazhu.data.RenameCollectionResult
+import com.lyn.mazhu.data.SaveResult
+import com.lyn.mazhu.data.ShareTextParser
 import com.lyn.mazhu.supabase.AuthResult
 import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
@@ -87,6 +95,16 @@ import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import kotlinx.coroutines.launch
+
+private enum class CollectionPickerMode {
+    MOVE,
+    COPY,
+}
+
+private data class CollectionPickerTarget(
+    val bookmark: Bookmark,
+    val mode: CollectionPickerMode,
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -114,24 +132,57 @@ private fun MazhuApp(
 ) {
     val collections by viewModel.collections.collectAsStateWithLifecycle()
     val bookmarks by viewModel.bookmarks.collectAsStateWithLifecycle()
+    val bookmarkCollections by viewModel.bookmarkCollections.collectAsStateWithLifecycle()
     val session by viewModel.session.collectAsStateWithLifecycle()
     val supabaseConfig by viewModel.supabaseConfig.collectAsStateWithLifecycle()
     val snackbarHostState = remember { SnackbarHostState() }
+    val listState = rememberLazyListState()
     val scope = rememberCoroutineScope()
+    val context = LocalContext.current
     var selectedCollectionId by remember { mutableStateOf<String?>(null) }
+    var searchQuery by remember { mutableStateOf("") }
     var showCreateDialog by remember { mutableStateOf(false) }
     var renameTarget by remember { mutableStateOf<CollectionSummary?>(null) }
     var deleteTarget by remember { mutableStateOf<CollectionSummary?>(null) }
-    var moveTarget by remember { mutableStateOf<Bookmark?>(null) }
+    var actionTarget by remember { mutableStateOf<Bookmark?>(null) }
+    var deleteBookmarkTarget by remember { mutableStateOf<Bookmark?>(null) }
+    var collectionPickerTarget by remember { mutableStateOf<CollectionPickerTarget?>(null) }
     var showAuthDialog by remember { mutableStateOf(false) }
     var showAccountDialog by remember { mutableStateOf(false) }
     var showSyncSettingsDialog by remember { mutableStateOf(false) }
+    var clipboardUrl by remember { mutableStateOf<String?>(null) }
 
     val selectedCollection = collections.firstOrNull { it.id == selectedCollectionId }
-    val visibleBookmarks = if (selectedCollectionId == null) {
-        bookmarks
-    } else {
-        bookmarks.filter { it.collectionId == selectedCollectionId }
+    val collectionById = collections.associateBy { it.id }
+    val bookmarkCollectionIds = bookmarkCollections
+        .groupBy { it.bookmarkId }
+        .mapValues { entry -> entry.value.map { it.collectionId } }
+    val selectedBookmarkIds = selectedCollectionId?.let { collectionId ->
+        bookmarkCollections
+            .filter { it.collectionId == collectionId }
+            .map { it.bookmarkId }
+            .toSet()
+    }
+    val query = searchQuery.trim()
+    val visibleBookmarks = bookmarks
+        .filter { bookmark -> selectedBookmarkIds == null || bookmark.id in selectedBookmarkIds }
+        .filter { bookmark ->
+            query.isBlank() ||
+                bookmark.title.contains(query, ignoreCase = true) ||
+                bookmark.originalUrl.contains(query, ignoreCase = true) ||
+                bookmark.accountName?.contains(query, ignoreCase = true) == true ||
+                bookmark.contentText?.contains(query, ignoreCase = true) == true
+        }
+
+    LaunchedEffect(selectedCollectionId) {
+        listState.scrollToItem(0)
+    }
+
+    LaunchedEffect(Unit) {
+        val detectedUrl = detectWechatClipboardUrl(context)
+        if (detectedUrl != null && !wasClipboardUrlHandled(context, detectedUrl)) {
+            clipboardUrl = detectedUrl
+        }
     }
 
     BackHandler(enabled = selectedCollectionId != null) {
@@ -168,6 +219,12 @@ private fun MazhuApp(
                     }
                 },
                 actions = {
+                    IconButton(onClick = { searchQuery = if (searchQuery.isBlank()) " " else "" }) {
+                        Icon(
+                            imageVector = Icons.Outlined.Search,
+                            contentDescription = "搜索",
+                        )
+                    }
                     IconButton(
                         onClick = {
                             if (session == null) {
@@ -228,6 +285,7 @@ private fun MazhuApp(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(padding),
+            state = listState,
             contentPadding = PaddingValues(
                 start = 16.dp,
                 end = 16.dp,
@@ -236,6 +294,13 @@ private fun MazhuApp(
             ),
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
+            item {
+                SearchField(
+                    value = searchQuery,
+                    onValueChange = { searchQuery = it },
+                )
+            }
+
             if (selectedCollectionId == null) {
                 if (session == null) {
                     item {
@@ -294,7 +359,10 @@ private fun MazhuApp(
                     BookmarkRow(
                         bookmark = bookmark,
                         syncEnabled = supabaseConfig.isConfigured,
-                        onMove = { moveTarget = bookmark },
+                        collectionNames = bookmarkCollectionIds[bookmark.id]
+                            .orEmpty()
+                            .mapNotNull { collectionById[it]?.name },
+                        onMenu = { actionTarget = bookmark },
                     )
                 }
             }
@@ -318,6 +386,48 @@ private fun MazhuApp(
                             snackbarHostState.showSnackbar("已经有同名收藏夹")
                         }
                     }
+                }
+            },
+        )
+    }
+
+    clipboardUrl?.let { url ->
+        AlertDialog(
+            onDismissRequest = {
+                markClipboardUrlHandled(context, url)
+                clipboardUrl = null
+            },
+            title = { Text("检测到公众号文章链接") },
+            text = { Text(url) },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.saveSharedText(url) { result ->
+                            markClipboardUrlHandled(context, url)
+                            clipboardUrl = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar(
+                                    when (result) {
+                                        is SaveResult.Saved -> "已保存到默认收藏夹"
+                                        is SaveResult.AlreadySaved -> "这篇文章已经码住了"
+                                        SaveResult.InvalidShare -> "没有找到可以收藏的链接"
+                                    },
+                                )
+                            }
+                        }
+                    },
+                ) {
+                    Text("添加")
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        markClipboardUrlHandled(context, url)
+                        clipboardUrl = null
+                    },
+                ) {
+                    Text("忽略")
                 }
             },
         )
@@ -375,34 +485,126 @@ private fun MazhuApp(
         )
     }
 
-    moveTarget?.let { bookmark ->
+    actionTarget?.let { bookmark ->
         AlertDialog(
-            onDismissRequest = { moveTarget = null },
-            title = { Text("移动到收藏夹") },
+            onDismissRequest = { actionTarget = null },
+            title = { Text(bookmark.title) },
             text = {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    collections.forEach { collection ->
-                        TextButton(
-                            onClick = {
-                                viewModel.moveBookmark(bookmark.id, collection.id)
-                                moveTarget = null
-                            },
-                            enabled = collection.id != bookmark.collectionId,
-                            modifier = Modifier.fillMaxWidth(),
-                        ) {
-                            Text(
-                                text = collection.name,
-                                modifier = Modifier.fillMaxWidth(),
+                    TextButton(
+                        onClick = {
+                            collectionPickerTarget = CollectionPickerTarget(
+                                bookmark = bookmark,
+                                mode = CollectionPickerMode.MOVE,
                             )
-                        }
+                            actionTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("移动到收藏夹", modifier = Modifier.fillMaxWidth())
+                    }
+                    TextButton(
+                        onClick = {
+                            collectionPickerTarget = CollectionPickerTarget(
+                                bookmark = bookmark,
+                                mode = CollectionPickerMode.COPY,
+                            )
+                            actionTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("复制到其他收藏夹", modifier = Modifier.fillMaxWidth())
+                    }
+                    TextButton(
+                        onClick = {
+                            copyToClipboard(context, bookmark.originalUrl)
+                            actionTarget = null
+                            scope.launch {
+                                snackbarHostState.showSnackbar("链接已复制")
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("复制链接", modifier = Modifier.fillMaxWidth())
+                    }
+                    TextButton(
+                        onClick = {
+                            deleteBookmarkTarget = bookmark
+                            actionTarget = null
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Text("删除", modifier = Modifier.fillMaxWidth())
                     }
                 }
             },
             confirmButton = {},
             dismissButton = {
-                TextButton(onClick = { moveTarget = null }) {
+                TextButton(onClick = { actionTarget = null }) {
                     Text("取消")
                 }
+            },
+        )
+    }
+
+    deleteBookmarkTarget?.let { bookmark ->
+        AlertDialog(
+            onDismissRequest = { deleteBookmarkTarget = null },
+            title = { Text("删除文章？") },
+            text = {
+                Text(
+                    if (selectedCollectionId == null) {
+                        "这会从所有收藏夹中删除这篇文章。"
+                    } else {
+                        "这只会从当前收藏夹移除，其他收藏夹中仍会保留。"
+                    },
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        viewModel.removeBookmarkFromCollection(
+                            bookmarkId = bookmark.id,
+                            collectionId = selectedCollectionId,
+                        )
+                        deleteBookmarkTarget = null
+                    },
+                ) {
+                    Text("删除")
+                }
+            },
+            dismissButton = {
+                TextButton(onClick = { deleteBookmarkTarget = null }) {
+                    Text("取消")
+                }
+            },
+        )
+    }
+
+    collectionPickerTarget?.let { target ->
+        MultiCollectionDialog(
+            title = if (target.mode == CollectionPickerMode.MOVE) {
+                "移动到收藏夹"
+            } else {
+                "复制到收藏夹"
+            },
+            collections = collections,
+            initiallySelectedIds = bookmarkCollectionIds[target.bookmark.id].orEmpty().toSet(),
+            onDismiss = { collectionPickerTarget = null },
+            onConfirm = { selectedIds ->
+                if (target.mode == CollectionPickerMode.MOVE) {
+                    viewModel.moveBookmarkFromCollection(
+                        bookmarkId = target.bookmark.id,
+                        fromCollectionId = selectedCollectionId,
+                        toCollectionIds = selectedIds,
+                    )
+                } else {
+                    viewModel.copyBookmarkToCollections(
+                        bookmarkId = target.bookmark.id,
+                        collectionIds = selectedIds,
+                    )
+                }
+                collectionPickerTarget = null
             },
         )
     }
@@ -454,6 +656,85 @@ private fun MazhuApp(
             },
         )
     }
+}
+
+@Composable
+private fun SearchField(
+    value: String,
+    onValueChange: (String) -> Unit,
+) {
+    TextField(
+        value = value.trimStart(),
+        onValueChange = onValueChange,
+        leadingIcon = {
+            Icon(Icons.Outlined.Search, contentDescription = null)
+        },
+        label = { Text("搜索收藏文章") },
+        singleLine = true,
+        modifier = Modifier.fillMaxWidth(),
+    )
+}
+
+@Composable
+private fun MultiCollectionDialog(
+    title: String,
+    collections: List<CollectionSummary>,
+    initiallySelectedIds: Set<String>,
+    onDismiss: () -> Unit,
+    onConfirm: (List<String>) -> Unit,
+) {
+    var selectedIds by remember(initiallySelectedIds) {
+        mutableStateOf(initiallySelectedIds)
+    }
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title) },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                collections.forEach { collection ->
+                    val selected = collection.id in selectedIds
+                    TextButton(
+                        onClick = {
+                            selectedIds = if (selected) {
+                                selectedIds - collection.id
+                            } else {
+                                selectedIds + collection.id
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = if (selected) "✓" else "",
+                                modifier = Modifier.size(24.dp),
+                            )
+                            Text(
+                                text = collection.name,
+                                modifier = Modifier.weight(1f),
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = { onConfirm(selectedIds.toList()) },
+                enabled = selectedIds.isNotEmpty(),
+            ) {
+                Text("确认")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("取消")
+            }
+        },
+    )
 }
 
 @Composable
@@ -952,7 +1233,8 @@ private fun EmptyState(inCollection: Boolean) {
 private fun BookmarkRow(
     bookmark: Bookmark,
     syncEnabled: Boolean,
-    onMove: () -> Unit,
+    collectionNames: List<String>,
+    onMenu: () -> Unit,
 ) {
     val context = LocalContext.current
 
@@ -983,12 +1265,12 @@ private fun BookmarkRow(
                     modifier = Modifier.weight(1f),
                 )
                 IconButton(
-                    onClick = onMove,
+                    onClick = onMenu,
                     modifier = Modifier.size(36.dp),
                 ) {
                     Icon(
-                        imageVector = Icons.AutoMirrored.Outlined.DriveFileMove,
-                        contentDescription = "移动文章",
+                        imageVector = Icons.Outlined.MoreVert,
+                        contentDescription = "文章操作",
                         modifier = Modifier.size(20.dp),
                     )
                 }
@@ -1007,6 +1289,16 @@ private fun BookmarkRow(
                     text = accountName,
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.primary,
+                )
+            }
+            if (collectionNames.isNotEmpty()) {
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = collectionNames.joinToString(" · "),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
                 )
             }
             Spacer(Modifier.height(14.dp))
@@ -1053,6 +1345,44 @@ private fun BookmarkRow(
             }
         }
     }
+}
+
+private fun copyToClipboard(
+    context: Context,
+    text: String,
+) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("文章链接", text))
+}
+
+private fun detectWechatClipboardUrl(context: Context): String? {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    val text = clipboard.primaryClip
+        ?.takeIf { it.itemCount > 0 }
+        ?.getItemAt(0)
+        ?.coerceToText(context)
+        ?.toString()
+        .orEmpty()
+    val url = ShareTextParser.extractUrl(text) ?: return null
+    return url.takeIf { Uri.parse(it).host == "mp.weixin.qq.com" }
+}
+
+private fun wasClipboardUrlHandled(
+    context: Context,
+    url: String,
+): Boolean {
+    val preferences = context.getSharedPreferences("clipboard_prompt", Context.MODE_PRIVATE)
+    return preferences.getString("last_url", null) == ShareTextParser.normalizeUrl(url)
+}
+
+private fun markClipboardUrlHandled(
+    context: Context,
+    url: String,
+) {
+    context.getSharedPreferences("clipboard_prompt", Context.MODE_PRIVATE)
+        .edit()
+        .putString("last_url", ShareTextParser.normalizeUrl(url))
+        .apply()
 }
 
 private fun formatTime(timestamp: Long): String =
