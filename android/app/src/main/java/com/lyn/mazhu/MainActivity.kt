@@ -4,7 +4,6 @@ import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
-import android.graphics.BitmapFactory
 import android.graphics.Color
 import android.net.Uri
 import android.os.Bundle
@@ -15,15 +14,14 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedContentTransitionScope
-import androidx.compose.animation.Crossfade
 import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.togetherWith
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -97,8 +95,6 @@ import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.ImeAction
@@ -120,25 +116,15 @@ import com.lyn.mazhu.supabase.SupabaseSession
 import com.lyn.mazhu.ui.theme.MazhuTheme
 import com.lyn.mazhu.worker.ParseWorkScheduler
 import com.lyn.mazhu.worker.SyncWorkScheduler
+import coil3.compose.AsyncImage
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import java.net.URL
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.coroutines.withContext
-import kotlin.math.max
 
-private const val PAGE_TRANSITION_DURATION_MS = 300
-private const val SEARCH_TRANSITION_DURATION_MS = 240
-private const val COVER_FADE_DURATION_MS = 220
-private const val SEARCH_KEYBOARD_DELAY_MS = 150L
-private const val COVER_DECODE_SIZE_PX = 320
-
-private object CoverImageMemoryCache {
-    val images = mutableMapOf<String, ImageBitmap>()
-}
+private const val PAGE_TRANSITION_DURATION_MS = 220
+private const val SEARCH_KEYBOARD_DELAY_MS = 50L
 
 private enum class CollectionPickerMode {
     MOVE,
@@ -228,108 +214,84 @@ private fun MazhuApp(
         selectedCollectionId = null
     }
 
-    AnimatedContent(
-        targetState = showSearchPage,
-        transitionSpec = {
-            if (targetState) {
-                slideIntoContainer(
-                    AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
-                ) togetherWith slideOutOfContainer(
-                    AnimatedContentTransitionScope.SlideDirection.Left,
-                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
-                )
-            } else {
-                slideIntoContainer(
-                    AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
-                ) togetherWith slideOutOfContainer(
-                    AnimatedContentTransitionScope.SlideDirection.Right,
-                    animationSpec = tween(SEARCH_TRANSITION_DURATION_MS),
-                )
-            }.using(SizeTransform(clip = false))
+    MainContent(
+        collections = collections,
+        bookmarks = bookmarks,
+        bookmarkCollectionIds = bookmarkCollectionIds,
+        collectionById = collectionById,
+        selectedCollectionId = selectedCollectionId,
+        supabaseConfigured = supabaseConfig.isConfigured,
+        session = session,
+        listState = listState,
+        snackbarHostState = snackbarHostState,
+        onBackFromCollection = { selectedCollectionId = null },
+        onOpenSearch = {
+            searchCollectionId = null
+            showSearchPage = true
         },
-        label = "main-search-transition",
-    ) { searchVisible ->
-        if (searchVisible) {
-            SearchPage(
-                bookmarks = searchBookmarks,
-                bookmarkCollectionIds = bookmarkCollectionIds,
-                collectionById = collectionById,
-                placeholder = if (searchCollectionId == null) {
-                    "搜索收藏文章"
+        onOpenCollectionSearch = { collectionId ->
+            searchCollectionId = collectionId
+            showSearchPage = true
+        },
+        onSyncClick = {
+            if (session == null) {
+                if (supabaseConfig.isConfigured) {
+                    showAuthDialog = true
                 } else {
-                    "搜索当前收藏夹"
-                },
-                resultFooter = if (searchCollectionId == null) {
-                    "以上为全部收藏文章的搜索结果"
+                    showSyncSettingsDialog = true
+                }
+            } else {
+                viewModel.syncNow()
+                scope.launch {
+                    snackbarHostState.showSnackbar("已开始同步")
+                }
+            }
+        },
+        onAccountClick = {
+            if (session == null) {
+                if (supabaseConfig.isConfigured) {
+                    showAuthDialog = true
                 } else {
-                    "以上为当前收藏夹的搜索结果"
-                },
-                onDismiss = {
-                    showSearchPage = false
-                    searchCollectionId = null
-                },
-            )
-        } else {
-            MainContent(
-                collections = collections,
-                bookmarks = bookmarks,
-                bookmarkCollectionIds = bookmarkCollectionIds,
-                collectionById = collectionById,
-                selectedCollectionId = selectedCollectionId,
-                supabaseConfigured = supabaseConfig.isConfigured,
-                session = session,
-                listState = listState,
-                snackbarHostState = snackbarHostState,
-                onBackFromCollection = { selectedCollectionId = null },
-                onOpenSearch = {
-                    searchCollectionId = null
-                    showSearchPage = true
-                },
-                onOpenCollectionSearch = { collectionId ->
-                    searchCollectionId = collectionId
-                    showSearchPage = true
-                },
-                onSyncClick = {
-                    if (session == null) {
-                        if (supabaseConfig.isConfigured) {
-                            showAuthDialog = true
-                        } else {
-                            showSyncSettingsDialog = true
-                        }
-                    } else {
-                        viewModel.syncNow()
-                        scope.launch {
-                            snackbarHostState.showSnackbar("已开始同步")
-                        }
-                    }
-                },
-                onAccountClick = {
-                    if (session == null) {
-                        if (supabaseConfig.isConfigured) {
-                            showAuthDialog = true
-                        } else {
-                            showSyncSettingsDialog = true
-                        }
-                    } else {
-                        showAccountDialog = true
-                    }
-                },
-                onCreateCollection = { showCreateDialog = true },
-                onLoginSync = {
-                    if (supabaseConfig.isConfigured) {
-                        showAuthDialog = true
-                    } else {
-                        showSyncSettingsDialog = true
-                    }
-                },
-                onOpenCollection = { selectedCollectionId = it },
-                onRenameCollection = { renameTarget = it },
-                onDeleteCollection = { deleteTarget = it },
-                onBookmarkMenu = { actionTarget = it },
-            )
-        }
+                    showSyncSettingsDialog = true
+                }
+            } else {
+                showAccountDialog = true
+            }
+        },
+        onCreateCollection = { showCreateDialog = true },
+        onLoginSync = {
+            if (supabaseConfig.isConfigured) {
+                showAuthDialog = true
+            } else {
+                showSyncSettingsDialog = true
+            }
+        },
+        onOpenCollection = { selectedCollectionId = it },
+        onRenameCollection = { renameTarget = it },
+        onDeleteCollection = { deleteTarget = it },
+        onBookmarkMenu = { actionTarget = it },
+    )
+
+    if (showSearchPage) {
+        SearchPage(
+            bookmarks = searchBookmarks,
+            bookmarkCollectionIds = bookmarkCollectionIds,
+            collectionById = collectionById,
+            placeholder = if (searchCollectionId == null) {
+                "搜索收藏文章"
+            } else {
+                "搜索当前收藏夹"
+            },
+            resultFooter = if (searchCollectionId == null) {
+                "以上为全部收藏文章的搜索结果"
+            } else {
+                "以上为当前收藏夹的搜索结果"
+            },
+            onDismiss = {
+                showSearchPage = false
+                searchCollectionId = null
+            },
+        )
     }
 
     if (showCreateDialog) {
@@ -794,6 +756,7 @@ private fun MainContent(
                     items(
                         items = collections,
                         key = CollectionSummary::id,
+                        contentType = { "collection" },
                     ) { collection ->
                         CollectionCard(
                             collection = collection,
@@ -832,6 +795,7 @@ private fun MainContent(
                     items(
                         items = pageBookmarks,
                         key = Bookmark::id,
+                        contentType = { "bookmark" },
                     ) { bookmark ->
                         BookmarkRow(
                             bookmark = bookmark,
@@ -1031,71 +995,21 @@ private fun RemoteCoverImage(
         )
     },
 ) {
-    var image by remember(url) {
-        mutableStateOf(url?.let { CoverImageMemoryCache.images[it] })
-    }
-    LaunchedEffect(url, loadImage) {
-        val coverUrl = url?.takeIf(String::isNotBlank) ?: return@LaunchedEffect
-        CoverImageMemoryCache.images[coverUrl]?.let { cachedImage ->
-            image = cachedImage
-            return@LaunchedEffect
-        }
-        if (!loadImage) {
-            image = null
-            return@LaunchedEffect
-        }
-        image = null
-        image = withContext(Dispatchers.IO) {
-            runCatching {
-                val connection = URL(coverUrl).openConnection().apply {
-                    connectTimeout = 8_000
-                    readTimeout = 8_000
-                }
-                connection.getInputStream().use { input ->
-                    decodeSampledCover(input.readBytes())?.asImageBitmap()
-                }
-            }.getOrNull()
-        }
-        image?.let { CoverImageMemoryCache.images[coverUrl] = it }
-    }
-
     Surface(
         color = MaterialTheme.colorScheme.primaryContainer,
         shape = RoundedCornerShape(cornerRadius.dp),
         modifier = modifier,
     ) {
-        Crossfade(
-            targetState = image,
-            animationSpec = tween(COVER_FADE_DURATION_MS),
-            label = "cover-fade",
-        ) { loadedImage ->
-            if (loadedImage != null) {
-                Image(
-                    bitmap = loadedImage,
-                    contentDescription = null,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                fallback()
-            }
+        Box(modifier = Modifier.fillMaxSize()) {
+            fallback()
+            AsyncImage(
+                model = url.takeIf { loadImage },
+                contentDescription = null,
+                contentScale = ContentScale.Crop,
+                modifier = Modifier.fillMaxSize(),
+            )
         }
     }
-}
-
-private fun decodeSampledCover(bytes: ByteArray): android.graphics.Bitmap? {
-    val bounds = BitmapFactory.Options().apply {
-        inJustDecodeBounds = true
-    }
-    BitmapFactory.decodeByteArray(bytes, 0, bytes.size, bounds)
-
-    val largestSide = max(bounds.outWidth, bounds.outHeight).coerceAtLeast(1)
-    val sampleSize = generateSequence(1) { it * 2 }
-        .first { largestSide / it <= COVER_DECODE_SIZE_PX || it >= 8 }
-    val options = BitmapFactory.Options().apply {
-        inSampleSize = sampleSize
-    }
-    return BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
 }
 
 @Composable
