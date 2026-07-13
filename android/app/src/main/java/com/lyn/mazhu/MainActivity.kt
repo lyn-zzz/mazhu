@@ -36,6 +36,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
@@ -79,7 +80,6 @@ import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -607,10 +607,6 @@ private fun MainContent(
     onDeleteCollection: (CollectionSummary) -> Unit,
     onBookmarkMenu: (Bookmark) -> Unit,
 ) {
-    val isListScrolling by remember {
-        derivedStateOf { listState.isScrollInProgress }
-    }
-    val loadUncachedCovers = !isListScrolling
     val firstCoverByCollectionId = remember(collections, bookmarks, bookmarkCollectionIds) {
         collections.associate { collection ->
             val ids = bookmarkCollectionIds
@@ -745,34 +741,36 @@ private fun MainContent(
                         }
                     }
 
-                    item {
-                        Text(
-                            text = "收藏夹",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                    item(key = "home_hero", contentType = "hero") {
+                        HomeHeroCard(
+                            bookmarkCount = bookmarks.size,
+                            collectionCount = collections.size,
+                            unsyncedCount = collections.sumOf { it.unsyncedCount },
                         )
                     }
 
-                    items(
+                    item(key = "collections_header", contentType = "section_header") {
+                        SectionHeader("收藏夹")
+                    }
+
+                    itemsIndexed(
                         items = collections,
-                        key = CollectionSummary::id,
-                        contentType = { "collection" },
-                    ) { collection ->
+                        key = { _, collection -> collection.id },
+                        contentType = { _, _ -> "collection" },
+                    ) { index, collection ->
                         CollectionCard(
                             collection = collection,
                             coverUrl = firstCoverByCollectionId[collection.id],
-                            loadCover = loadUncachedCovers,
+                            featured = index == 0,
                             onOpen = { onOpenCollection(collection.id) },
                             onRename = { onRenameCollection(collection) },
                             onDelete = { onDeleteCollection(collection) },
                         )
                     }
 
-                    item {
-                        Text(
-                            text = "最近收藏",
-                            style = MaterialTheme.typography.titleMedium,
-                            fontWeight = FontWeight.SemiBold,
+                    item(key = "recent_header", contentType = "section_header") {
+                        SectionHeader(
+                            title = "最近收藏",
                             modifier = Modifier.padding(top = 12.dp),
                         )
                     }
@@ -800,7 +798,6 @@ private fun MainContent(
                         BookmarkRow(
                             bookmark = bookmark,
                             syncEnabled = supabaseConfigured,
-                            loadCover = loadUncachedCovers,
                             collectionNames = bookmarkCollectionIds[bookmark.id]
                                 .orEmpty()
                                 .mapNotNull { collectionById[it]?.name },
@@ -810,6 +807,102 @@ private fun MainContent(
                 }
             }
         }
+    }
+}
+
+@OptIn(ExperimentalComposeUiApi::class)
+@Composable
+private fun HomeHeroCard(
+    bookmarkCount: Int,
+    collectionCount: Int,
+    unsyncedCount: Long,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.primaryContainer,
+        contentColor = MaterialTheme.colorScheme.onPrimaryContainer,
+        shape = RoundedCornerShape(28.dp),
+        tonalElevation = 1.dp,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(20.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = "今天码住了什么？",
+                    style = MaterialTheme.typography.titleLarge,
+                    fontWeight = FontWeight.Bold,
+                )
+                Spacer(Modifier.height(8.dp))
+                Text(
+                    text = if (unsyncedCount > 0) {
+                        "$unsyncedCount 篇待同步，联网后可继续补齐"
+                    } else {
+                        "本地优先保存，之后再同步和整理"
+                    },
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            Column(
+                horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                HeroStatPill(value = "$bookmarkCount", label = "文章")
+                HeroStatPill(value = "$collectionCount", label = "收藏夹")
+            }
+        }
+    }
+}
+
+@Composable
+private fun HeroStatPill(
+    value: String,
+    label: String,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        contentColor = MaterialTheme.colorScheme.onSurface,
+        shape = RoundedCornerShape(18.dp),
+    ) {
+        Column(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
+            Text(
+                text = value,
+                style = MaterialTheme.typography.titleMedium,
+                fontWeight = FontWeight.Bold,
+            )
+            Text(
+                text = label,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionHeader(
+    title: String,
+    modifier: Modifier = Modifier,
+) {
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(top = 6.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = title,
+            style = MaterialTheme.typography.titleLarge,
+            fontWeight = FontWeight.Bold,
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -983,7 +1076,6 @@ private fun SearchPage(
 @Composable
 private fun RemoteCoverImage(
     url: String?,
-    loadImage: Boolean,
     modifier: Modifier,
     cornerRadius: Int,
     fallback: @Composable () -> Unit = {
@@ -1003,7 +1095,7 @@ private fun RemoteCoverImage(
         Box(modifier = Modifier.fillMaxSize()) {
             fallback()
             AsyncImage(
-                model = url.takeIf { loadImage },
+                model = url,
                 contentDescription = null,
                 contentScale = ContentScale.Crop,
                 modifier = Modifier.fillMaxSize(),
@@ -1064,7 +1156,6 @@ private fun SearchResultRow(
     ) {
         RemoteCoverImage(
             url = bookmark.coverUrl,
-            loadImage = true,
             modifier = Modifier.size(92.dp),
             cornerRadius = 10,
         )
@@ -1516,7 +1607,7 @@ private fun AccountDialog(
 private fun CollectionCard(
     collection: CollectionSummary,
     coverUrl: String?,
-    loadCover: Boolean,
+    featured: Boolean,
     onOpen: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
@@ -1528,22 +1619,30 @@ private fun CollectionCard(
         modifier = Modifier
             .fillMaxWidth()
             .clickable(onClick = onOpen),
-        shape = RoundedCornerShape(16.dp),
+        shape = RoundedCornerShape(if (featured) 28.dp else 24.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surfaceContainer,
+            containerColor = if (featured) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surfaceContainerHigh
+            },
         ),
     ) {
         Row(
             modifier = Modifier
                 .fillMaxWidth()
-                .padding(start = 18.dp, top = 18.dp, bottom = 18.dp, end = 8.dp),
+                .padding(
+                    start = if (featured) 14.dp else 16.dp,
+                    top = if (featured) 14.dp else 16.dp,
+                    bottom = if (featured) 14.dp else 16.dp,
+                    end = 8.dp,
+                ),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             RemoteCoverImage(
                 url = coverUrl,
-                loadImage = loadCover,
-                modifier = Modifier.size(58.dp),
-                cornerRadius = 12,
+                modifier = Modifier.size(if (featured) 82.dp else 66.dp),
+                cornerRadius = if (featured) 22 else 18,
                 fallback = {
                     Icon(
                         imageVector = Icons.Outlined.Folder,
@@ -1563,33 +1662,39 @@ private fun CollectionCard(
             ) {
                 Text(
                     text = collection.name,
-                    style = MaterialTheme.typography.titleMedium,
-                    fontWeight = FontWeight.SemiBold,
+                    style = if (featured) {
+                        MaterialTheme.typography.titleLarge
+                    } else {
+                        MaterialTheme.typography.titleMedium
+                    },
+                    fontWeight = FontWeight.Bold,
                 )
-                Spacer(Modifier.height(4.dp))
-                Text(
-                    text = "${collection.articleCount} 篇文章",
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-            }
-
-            if (collection.unsyncedCount > 0) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                ) {
-                    Icon(
-                        imageVector = Icons.Outlined.CloudOff,
-                        contentDescription = null,
-                        tint = MaterialTheme.colorScheme.outline,
-                        modifier = Modifier.size(17.dp),
-                    )
-                    Text(
-                        text = "${collection.unsyncedCount} 未同步",
-                        style = MaterialTheme.typography.labelMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                Spacer(Modifier.height(8.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Surface(
+                        color = MaterialTheme.colorScheme.surface,
+                        contentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+                        shape = RoundedCornerShape(999.dp),
+                    ) {
+                        Text(
+                            text = "${collection.articleCount} 篇文章",
+                            style = MaterialTheme.typography.labelMedium,
+                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                        )
+                    }
+                    if (collection.unsyncedCount > 0) {
+                        Surface(
+                            color = MaterialTheme.colorScheme.tertiaryContainer,
+                            contentColor = MaterialTheme.colorScheme.onTertiaryContainer,
+                            shape = RoundedCornerShape(999.dp),
+                        ) {
+                            Text(
+                                text = "${collection.unsyncedCount} 待同步",
+                                style = MaterialTheme.typography.labelMedium,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1706,10 +1811,37 @@ private fun EmptyState(inCollection: Boolean) {
 }
 
 @Composable
+private fun MetadataPill(
+    text: String,
+    emphasized: Boolean = false,
+) {
+    Surface(
+        color = if (emphasized) {
+            MaterialTheme.colorScheme.secondaryContainer
+        } else {
+            MaterialTheme.colorScheme.surfaceContainerHighest
+        },
+        contentColor = if (emphasized) {
+            MaterialTheme.colorScheme.onSecondaryContainer
+        } else {
+            MaterialTheme.colorScheme.onSurfaceVariant
+        },
+        shape = RoundedCornerShape(999.dp),
+    ) {
+        Text(
+            text = text,
+            style = MaterialTheme.typography.labelMedium,
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp),
+        )
+    }
+}
+
+@Composable
 private fun BookmarkRow(
     bookmark: Bookmark,
     syncEnabled: Boolean,
-    loadCover: Boolean,
     collectionNames: List<String>,
     onMenu: () -> Unit,
 ) {
@@ -1723,19 +1855,17 @@ private fun BookmarkRow(
                     Intent(Intent.ACTION_VIEW, Uri.parse(bookmark.originalUrl)),
                 )
             },
-        shape = RoundedCornerShape(14.dp),
+        shape = RoundedCornerShape(28.dp),
         colors = CardDefaults.cardColors(
-            containerColor = MaterialTheme.colorScheme.surface,
+            containerColor = MaterialTheme.colorScheme.surfaceContainerLow,
         ),
-        border = CardDefaults.outlinedCardBorder(),
     ) {
-        Column(modifier = Modifier.padding(16.dp)) {
+        Column(modifier = Modifier.padding(14.dp)) {
             Row(verticalAlignment = Alignment.Top) {
                 RemoteCoverImage(
                     url = bookmark.coverUrl,
-                    loadImage = loadCover,
-                    modifier = Modifier.size(82.dp),
-                    cornerRadius = 12,
+                    modifier = Modifier.size(96.dp),
+                    cornerRadius = 24,
                 )
                 Column(
                     modifier = Modifier
@@ -1745,8 +1875,8 @@ private fun BookmarkRow(
                     Row(verticalAlignment = Alignment.Top) {
                         Text(
                             text = bookmark.title,
-                            style = MaterialTheme.typography.titleSmall,
-                            fontWeight = FontWeight.SemiBold,
+                            style = MaterialTheme.typography.titleMedium,
+                            fontWeight = FontWeight.Bold,
                             maxLines = 2,
                             overflow = TextOverflow.Ellipsis,
                             modifier = Modifier.weight(1f),
@@ -1762,39 +1892,22 @@ private fun BookmarkRow(
                             )
                         }
                     }
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = bookmark.originalUrl,
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        maxLines = 1,
-                        overflow = TextOverflow.Ellipsis,
-                    )
+                    Spacer(Modifier.height(8.dp))
                     bookmark.accountName?.takeIf(String::isNotBlank)?.let { accountName ->
-                        Spacer(Modifier.height(6.dp))
-                        Text(
+                        MetadataPill(
                             text = accountName,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.primary,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
+                            emphasized = true,
                         )
                     }
                     if (collectionNames.isNotEmpty()) {
                         Spacer(Modifier.height(6.dp))
-                        Text(
+                        MetadataPill(
                             text = collectionNames.joinToString(" · "),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
                         )
                     }
                 }
             }
-            Spacer(Modifier.height(14.dp))
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(12.dp))
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
