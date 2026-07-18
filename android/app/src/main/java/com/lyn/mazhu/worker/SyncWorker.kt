@@ -2,6 +2,7 @@ package com.lyn.mazhu.worker
 
 import android.content.Context
 import androidx.work.CoroutineWorker
+import androidx.room.withTransaction
 import androidx.work.WorkerParameters
 import com.lyn.mazhu.MazhuApplication
 import com.lyn.mazhu.data.BookmarkStatus
@@ -84,6 +85,21 @@ class SyncWorker(
                     }
                 }
                 dao.deletePendingDeletion(deletion.key)
+            }
+
+            val remoteCollections = client.listCollections(session)
+            val remoteBookmarks = client.listBookmarks(session)
+            val remoteRelations = client.listBookmarkCollections(session)
+            application.database.withTransaction {
+                if (remoteCollections.isNotEmpty()) {
+                    dao.upsertCollections(remoteCollections)
+                }
+                if (remoteBookmarks.isNotEmpty()) {
+                    dao.upsertBookmarks(remoteBookmarks)
+                }
+                if (remoteRelations.isNotEmpty()) {
+                    dao.upsertBookmarkCollections(remoteRelations)
+                }
             }
             Result.success()
         } catch (error: Exception) {

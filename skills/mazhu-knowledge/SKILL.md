@@ -29,7 +29,7 @@ node src/cli.ts <command>
 
 ## Core Workflow
 
-1. Check the user is logged in:
+1. Check login first:
 
 ```bash
 npm run cli -- whoami
@@ -37,25 +37,23 @@ npm run cli -- whoami
 
 If not logged in, tell the user to run `npm run cli -- login`.
 
-2. Search first, using the user's question keywords:
+2. Search with JSON output so article IDs, collections, summaries, topics, and source URLs are not misread:
 
 ```bash
-npm run cli -- search <keywords> --limit 10
+npm run cli -- search <keywords> --limit 10 --json
 ```
 
-Search matches article title,公众号名称, original URL,收藏夹名称, AI summary, and topics.
+Search matches title, 公众号名称, original URL, all collection names, AI summary, and topics. A saved article may belong to multiple collections; use the `collections` array in JSON, not the legacy `collection_id` field.
 
-3. Prefer answering from search results when summaries are enough.
+3. Prefer answering from `ai_summary`, `ai_key_points`, `ai_topics`, title, account name, and collection names when enough. Do not read full text just to answer broad discovery questions.
 
-4. Read full text only when needed:
+4. Read selected full text only when summaries are missing, ambiguous, or the user asks for implementation details, exact project names, comparisons, or quotes:
 
 ```bash
-npm run cli -- read <article-id-prefix>
+npm run cli -- read <article-id-prefix> --json
 ```
 
-Use full text for detailed comparisons, implementation steps, exact project names, or when the summary is ambiguous.
-
-5. If summaries are missing and the user asks for knowledge-base QA, generate them before answering:
+5. If summaries are missing and the user asks for knowledge-base QA, generate a small batch first:
 
 ```bash
 npm run cli -- summarize --all --limit 10
@@ -74,32 +72,34 @@ npm run cli -- config set
 - Say when the knowledge base has no clear evidence.
 - Distinguish summary-derived claims from full-text-derived claims if precision matters.
 - For time-sensitive claims such as star counts or current project status, say they come from the saved article and may need live verification.
-- Do not read all full texts by default. Start with summaries, then selectively read.
+- Do not bulk-read full texts. Search/list first, read only the small candidate set needed.
+- If `summary_status` is `pending`, `failed`, or `skipped`, treat the summary as unavailable and decide whether to run `summarize` or read the article.
+- If `content_quality_status` is `suspect`, warn that the parsed content may be unreliable.
 
 ## Useful Commands
 
-List folders:
+List collections:
 
 ```bash
-npm run cli -- collections
+npm run cli -- collections --json
 ```
 
 Search all saved articles:
 
 ```bash
-npm run cli -- search AI --limit 10
+npm run cli -- search AI --limit 10 --json
 ```
 
-Search one folder:
+Search one collection:
 
 ```bash
-npm run cli -- search --collection UI/UX --limit 10
+npm run cli -- search GitHub --collection UI/UX --limit 10 --json
 ```
 
 Read full article:
 
 ```bash
-npm run cli -- read 4430582a
+npm run cli -- read 4430582a --json
 ```
 
 Generate missing summaries:
@@ -119,7 +119,7 @@ npm run cli -- config show
 For topic discovery questions, structure the response as:
 
 - Direct answer: what was found.
-- Relevant saved articles: title, collection, short reason, original URL.
+- Relevant saved articles: title, collections, short reason, original URL.
 - Evidence limits: whether only summary was used or full text was read.
 
 For recommendation questions, group by use case rather than by article order.

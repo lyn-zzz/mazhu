@@ -28,6 +28,18 @@ class BookmarkRepository(
 
     suspend fun getCollections(): List<Collection> = bookmarkDao.getCollections()
 
+
+    suspend fun hasPendingSync(): Boolean =
+        bookmarkDao.getPendingCollections().isNotEmpty() ||
+            bookmarkDao.getPendingBookmarks().isNotEmpty() ||
+            bookmarkDao.getPendingBookmarkCollections().isNotEmpty() ||
+            bookmarkDao.getPendingDeletions().isNotEmpty()
+
+    suspend fun hasPendingVisibleSync(): Boolean =
+        bookmarkDao.getPendingCollections().isNotEmpty() ||
+            bookmarkDao.getPendingBookmarks().isNotEmpty() ||
+            bookmarkDao.getPendingBookmarkCollections().isNotEmpty()
+
     suspend fun saveSharedText(sharedText: String): SaveResult {
         val url = ShareTextParser.extractUrl(sharedText)
             ?: return SaveResult.InvalidShare
@@ -71,6 +83,7 @@ class BookmarkRepository(
         val collection = Collection(
             id = UUID.randomUUID().toString(),
             name = normalizedName,
+            sortOrder = System.currentTimeMillis(),
             syncStatus = BookmarkStatus.SYNC_LOCAL_ONLY,
             syncError = null,
             createdAt = System.currentTimeMillis(),
@@ -161,6 +174,31 @@ class BookmarkRepository(
         )
     }
 
+    suspend fun setBookmarkCollections(
+        bookmarkId: String,
+        collectionIds: List<String>,
+    ) {
+        val targetIds = collectionIds
+            .distinct()
+            .ifEmpty { listOf(DEFAULT_COLLECTION_ID) }
+
+        database.withTransaction {
+            val existingIds = bookmarkDao.getBookmarkCollectionIds(bookmarkId).toSet()
+            val targetIdSet = targetIds.toSet()
+            val removedIds = existingIds - targetIdSet
+
+            addBookmarkToCollections(bookmarkId, targetIds)
+            if (targetIds.isNotEmpty()) {
+                bookmarkDao.deleteBookmarkCollectionsExcept(bookmarkId, targetIds)
+            }
+            removedIds.forEach { collectionId ->
+                bookmarkDao.insertPendingDeletion(
+                    PendingDeletion.bookmarkCollection(bookmarkId, collectionId),
+                )
+            }
+        }
+    }
+
     suspend fun moveBookmarkFromCollection(
         bookmarkId: String,
         fromCollectionId: String?,
@@ -205,6 +243,17 @@ class BookmarkRepository(
     }
 
     suspend fun findPendingParseIds(): List<String> = bookmarkDao.findPendingParseIds()
+
+    suspend fun reorderCollections(collectionIds: List<String>) {
+        database.withTransaction {
+            collectionIds.forEachIndexed { index, collectionId ->
+                bookmarkDao.updateCollectionSortOrder(
+                    collectionId = collectionId,
+                    sortOrder = index.toLong(),
+                )
+            }
+        }
+    }
 
     companion object {
         const val DEFAULT_COLLECTION_ID = "default"

@@ -1,4 +1,13 @@
-# Copy this file to android/local.properties and fill local values.
+# Copy this file to android/local.properties for local development.
 sdk.dir=/Users/your-name/Library/Android/sdk
+
+# Optional. Fill these when building an APK against your own Supabase project.
 SUPABASE_URL=https://your-project-ref.supabase.co
 SUPABASE_PUBLISHABLE_KEY=sb_publishable_xxx
+
+# Optional. Release signing can also be provided through environment variables
+# or GitHub Actions secrets with the same names.
+# MAZHU_RELEASE_KEYSTORE_PATH=/absolute/path/to/mazhu-release.jks
+# MAZHU_RELEASE_KEYSTORE_PASSWORD=
+# MAZHU_RELEASE_KEY_ALIAS=mazhu
+# MAZHU_RELEASE_KEY_PASSWORD=

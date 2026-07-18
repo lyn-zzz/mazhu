@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- 增加 GitHub Release APK 自动构建工作流。
+- 将文档整理为普通用户指南和开发者指南，并新增 AGENTS/CLAUDE agent 入口文档。
 - Android App 支持未配置 Supabase 时以本地-only 模式运行。
 - 增加 App 内云同步设置，可在运行期配置 Supabase URL 和 publishable key。
 - 未启用云同步时，文章状态显示为“仅本地”。

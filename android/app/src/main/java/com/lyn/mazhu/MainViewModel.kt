@@ -95,12 +95,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun reorderCollections(collectionIds: List<String>) {
+        viewModelScope.launch {
+            repository.reorderCollections(collectionIds)
+        }
+    }
+
     fun copyBookmarkToCollections(
         bookmarkId: String,
         collectionIds: List<String>,
     ) {
         viewModelScope.launch {
             repository.addBookmarkToCollections(bookmarkId, collectionIds)
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun copyBookmarksToCollections(
+        bookmarkIds: List<String>,
+        collectionIds: List<String>,
+    ) {
+        viewModelScope.launch {
+            bookmarkIds.distinct().forEach { bookmarkId ->
+                repository.addBookmarkToCollections(bookmarkId, collectionIds)
+            }
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun setBookmarkCollections(
+        bookmarkId: String,
+        collectionIds: List<String>,
+    ) {
+        viewModelScope.launch {
+            repository.setBookmarkCollections(bookmarkId, collectionIds)
             SyncWorkScheduler.enqueue(app)
         }
     }
@@ -120,6 +148,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    fun moveBookmarksFromCollection(
+        bookmarkIds: List<String>,
+        fromCollectionId: String?,
+        toCollectionIds: List<String>,
+    ) {
+        viewModelScope.launch {
+            bookmarkIds.distinct().forEach { bookmarkId ->
+                repository.moveBookmarkFromCollection(
+                    bookmarkId = bookmarkId,
+                    fromCollectionId = fromCollectionId,
+                    toCollectionIds = toCollectionIds,
+                )
+            }
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
     fun removeBookmarkFromCollection(
         bookmarkId: String,
         collectionId: String?,
@@ -129,6 +174,22 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 repository.deleteBookmarkCompletely(bookmarkId)
             } else {
                 repository.removeBookmarkFromCollection(bookmarkId, collectionId)
+            }
+            SyncWorkScheduler.enqueue(app)
+        }
+    }
+
+    fun removeBookmarksFromCollection(
+        bookmarkIds: List<String>,
+        collectionId: String?,
+    ) {
+        viewModelScope.launch {
+            bookmarkIds.distinct().forEach { bookmarkId ->
+                if (collectionId == null) {
+                    repository.deleteBookmarkCompletely(bookmarkId)
+                } else {
+                    repository.removeBookmarkFromCollection(bookmarkId, collectionId)
+                }
             }
             SyncWorkScheduler.enqueue(app)
         }
@@ -186,7 +247,11 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         authRepository.signOut()
     }
 
-    fun syncNow() {
-        SyncWorkScheduler.enqueue(app)
+    fun syncNow(onStatus: (Boolean) -> Unit = {}) {
+        viewModelScope.launch {
+            val hasPendingSync = repository.hasPendingVisibleSync()
+            SyncWorkScheduler.enqueue(app)
+            onStatus(hasPendingSync)
+        }
     }
 }

@@ -11,6 +11,7 @@ import androidx.room.PrimaryKey
 data class Collection(
     @PrimaryKey val id: String,
     val name: String,
+    val sortOrder: Long,
     val syncStatus: String,
     val syncError: String?,
     val createdAt: Long,
@@ -19,6 +20,7 @@ data class Collection(
 data class CollectionSummary(
     val id: String,
     val name: String,
+    val sortOrder: Long,
     val createdAt: Long,
     val articleCount: Long,
     val unsyncedCount: Long,

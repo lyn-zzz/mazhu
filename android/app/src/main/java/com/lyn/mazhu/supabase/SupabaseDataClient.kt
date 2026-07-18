@@ -3,8 +3,10 @@ package com.lyn.mazhu.supabase
 import android.net.Uri
 import com.lyn.mazhu.data.Bookmark
 import com.lyn.mazhu.data.BookmarkCollection
+import com.lyn.mazhu.data.BookmarkStatus
 import com.lyn.mazhu.data.Collection
 import java.time.Instant
+import java.time.OffsetDateTime
 import org.json.JSONArray
 import org.json.JSONObject
 
@@ -77,6 +79,69 @@ class SupabaseDataClient(
         )
     }
 
+    suspend fun listCollections(session: SupabaseSession): List<Collection> {
+        val response = httpClient.request(
+            path = "/rest/v1/collections?select=id,name,created_at&order=created_at.asc&limit=10000",
+            method = "GET",
+            accessToken = session.accessToken,
+        )
+        return JSONArray(response.body).mapObjectsTyped { json ->
+            val createdAt = json.optTimestampMillis("created_at")
+            Collection(
+                id = json.getString("id"),
+                name = json.getString("name"),
+                sortOrder = if (json.getString("id") == "default") 0L else createdAt,
+                syncStatus = BookmarkStatus.SYNC_SYNCED,
+                syncError = null,
+                createdAt = createdAt,
+            )
+        }
+    }
+
+    suspend fun listBookmarks(session: SupabaseSession): List<Bookmark> {
+        val response = httpClient.request(
+            path = "/rest/v1/bookmarks?select=id,original_url,normalized_url,title,account_name,cover_url,published_at,content_text,collection_id,parse_status,parse_error,created_at&order=created_at.asc&limit=10000",
+            method = "GET",
+            accessToken = session.accessToken,
+        )
+        return JSONArray(response.body).mapObjectsTyped { json ->
+            Bookmark(
+                id = json.getString("id"),
+                originalUrl = json.getString("original_url"),
+                normalizedUrl = json.getString("normalized_url"),
+                title = json.getString("title"),
+                accountName = json.optNullableString("account_name"),
+                coverUrl = json.optNullableString("cover_url"),
+                publishedAt = json.optTimestampMillisOrNull("published_at"),
+                contentText = json.optNullableString("content_text"),
+                collectionId = json.optNullableString("collection_id") ?: "default",
+                parseStatus = json.optNullableString("parse_status")
+                    ?: BookmarkStatus.PARSE_PENDING,
+                parseError = json.optNullableString("parse_error"),
+                syncStatus = BookmarkStatus.SYNC_SYNCED,
+                syncError = null,
+                createdAt = json.optTimestampMillis("created_at"),
+            )
+        }
+    }
+
+    suspend fun listBookmarkCollections(session: SupabaseSession): List<BookmarkCollection> {
+        val response = httpClient.request(
+            path = "/rest/v1/bookmark_collections?select=bookmark_id,collection_id,created_at&order=created_at.asc&limit=10000",
+            method = "GET",
+            accessToken = session.accessToken,
+        )
+        return JSONArray(response.body).mapObjectsTyped { json ->
+            BookmarkCollection(
+                bookmarkId = json.getString("bookmark_id"),
+                collectionId = json.getString("collection_id"),
+                syncStatus = BookmarkStatus.SYNC_SYNCED,
+                syncError = null,
+                createdAt = json.optTimestampMillis("created_at"),
+            )
+        }
+    }
+
     suspend fun deleteCollection(
         session: SupabaseSession,
         collectionId: String,
@@ -119,6 +184,29 @@ class SupabaseDataClient(
             accessToken = session.accessToken,
             prefer = "return=minimal",
         )
+    }
+
+    private fun <T> JSONArray.mapObjectsTyped(
+        transform: (JSONObject) -> T,
+    ): List<T> = List(length()) { index -> transform(getJSONObject(index)) }
+
+    private fun JSONObject.optNullableString(key: String): String? {
+        if (!has(key) || isNull(key)) {
+            return null
+        }
+        return optString(key).takeIf(String::isNotBlank)
+    }
+
+    private fun JSONObject.optTimestampMillis(key: String): Long =
+        optTimestampMillisOrNull(key) ?: System.currentTimeMillis()
+
+    private fun JSONObject.optTimestampMillisOrNull(key: String): Long? {
+        val value = optNullableString(key) ?: return null
+        return runCatching { Instant.parse(value).toEpochMilli() }
+            .getOrElse {
+                runCatching { OffsetDateTime.parse(value).toInstant().toEpochMilli() }
+                    .getOrNull()
+            }
     }
 
     private fun JSONObject.putNullable(

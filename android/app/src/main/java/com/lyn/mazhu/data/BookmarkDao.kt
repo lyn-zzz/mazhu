@@ -4,6 +4,7 @@ import androidx.room.Dao
 import androidx.room.Insert
 import androidx.room.OnConflictStrategy
 import androidx.room.Query
+import androidx.room.Upsert
 import kotlinx.coroutines.flow.Flow
 
 @Dao
@@ -42,6 +43,7 @@ interface BookmarkDao {
         SELECT
             collections.id AS id,
             collections.name AS name,
+            collections.sortOrder AS sortOrder,
             collections.createdAt AS createdAt,
             COUNT(DISTINCT bookmark_collections.bookmarkId) AS articleCount,
             COALESCE(
@@ -56,9 +58,10 @@ interface BookmarkDao {
         FROM collections
         LEFT JOIN bookmark_collections
             ON bookmark_collections.collectionId = collections.id
-        GROUP BY collections.id, collections.name, collections.createdAt
+        GROUP BY collections.id, collections.name, collections.sortOrder, collections.createdAt
         ORDER BY
             CASE WHEN collections.id = 'default' THEN 0 ELSE 1 END,
+            collections.sortOrder ASC,
             collections.createdAt ASC
         """,
     )
@@ -69,6 +72,7 @@ interface BookmarkDao {
         SELECT * FROM collections
         ORDER BY
             CASE WHEN id = 'default' THEN 0 ELSE 1 END,
+            sortOrder ASC,
             createdAt ASC
         """,
     )
@@ -95,6 +99,9 @@ interface BookmarkDao {
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertCollection(collection: Collection): Long
 
+    @Upsert
+    suspend fun upsertCollections(collections: List<Collection>)
+
     @Query(
         """
         UPDATE collections
@@ -109,8 +116,14 @@ interface BookmarkDao {
     @Query("DELETE FROM collections WHERE id = :collectionId")
     suspend fun deleteCollection(collectionId: String)
 
+    @Query("UPDATE collections SET sortOrder = :sortOrder WHERE id = :collectionId")
+    suspend fun updateCollectionSortOrder(collectionId: String, sortOrder: Long)
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertBookmarkCollection(relation: BookmarkCollection): Long
+
+    @Upsert
+    suspend fun upsertBookmarkCollections(relations: List<BookmarkCollection>)
 
     @Query(
         """
@@ -143,6 +156,9 @@ interface BookmarkDao {
 
     @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId AND collectionId = :collectionId")
     suspend fun deleteBookmarkCollection(bookmarkId: String, collectionId: String)
+
+    @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId AND collectionId NOT IN (:collectionIds)")
+    suspend fun deleteBookmarkCollectionsExcept(bookmarkId: String, collectionIds: List<String>)
 
     @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
     suspend fun deleteBookmarkCollections(bookmarkId: String)
@@ -195,6 +211,9 @@ interface BookmarkDao {
 
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insert(bookmark: Bookmark): Long
+
+    @Upsert
+    suspend fun upsertBookmarks(bookmarks: List<Bookmark>)
 
     @Query("SELECT * FROM bookmarks WHERE normalizedUrl = :normalizedUrl LIMIT 1")
     suspend fun findByNormalizedUrl(normalizedUrl: String): Bookmark?

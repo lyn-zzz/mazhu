@@ -9,7 +9,7 @@ import androidx.sqlite.db.SupportSQLiteDatabase
 
 @Database(
     entities = [Bookmark::class, Collection::class, BookmarkCollection::class, PendingDeletion::class],
-    version = 5,
+    version = 6,
     exportSchema = false,
 )
 abstract class BookmarkDatabase : RoomDatabase() {
@@ -23,6 +23,7 @@ abstract class BookmarkDatabase : RoomDatabase() {
                 "mazhu.db",
             )
                 .addMigrations(MIGRATION_1_2, MIGRATION_2_3, MIGRATION_3_4, MIGRATION_4_5)
+                .addMigrations(MIGRATION_5_6)
                 .build()
 
         private val MIGRATION_1_2 = object : Migration(1, 2) {
@@ -203,6 +204,26 @@ abstract class BookmarkDatabase : RoomDatabase() {
                         syncError,
                         createdAt
                     FROM bookmarks
+                    """.trimIndent(),
+                )
+            }
+        }
+
+        private val MIGRATION_5_6 = object : Migration(5, 6) {
+            override fun migrate(db: SupportSQLiteDatabase) {
+                db.execSQL(
+                    """
+                    ALTER TABLE collections
+                    ADD COLUMN sortOrder INTEGER NOT NULL DEFAULT 0
+                    """.trimIndent(),
+                )
+                db.execSQL(
+                    """
+                    UPDATE collections
+                    SET sortOrder = CASE
+                        WHEN id = 'default' THEN 0
+                        ELSE createdAt
+                    END
                     """.trimIndent(),
                 )
             }

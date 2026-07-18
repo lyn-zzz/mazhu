@@ -10,6 +10,25 @@ val localProperties = Properties().apply {
     }
 }
 
+fun propertyOrEnv(name: String): String =
+    (localProperties.getProperty(name) ?: System.getenv(name) ?: "").trim()
+
+fun quotedBuildConfig(value: String): String =
+    "\"${value.replace("\\", "\\\\").replace("\"", "\\\"")}\""
+
+val supabaseUrl = propertyOrEnv("SUPABASE_URL")
+val supabasePublishableKey = propertyOrEnv("SUPABASE_PUBLISHABLE_KEY")
+val releaseKeystorePath = propertyOrEnv("MAZHU_RELEASE_KEYSTORE_PATH")
+val releaseKeystorePassword = propertyOrEnv("MAZHU_RELEASE_KEYSTORE_PASSWORD")
+val releaseKeyAlias = propertyOrEnv("MAZHU_RELEASE_KEY_ALIAS")
+val releaseKeyPassword = propertyOrEnv("MAZHU_RELEASE_KEY_PASSWORD")
+val hasReleaseSigningConfig = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword,
+).all { it.isNotBlank() }
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.compose)
@@ -32,18 +51,32 @@ android {
         buildConfigField(
             "String",
             "SUPABASE_URL",
-            "\"${localProperties.getProperty("SUPABASE_URL", "")}\"",
+            quotedBuildConfig(supabaseUrl),
         )
         buildConfigField(
             "String",
             "SUPABASE_PUBLISHABLE_KEY",
-            "\"${localProperties.getProperty("SUPABASE_PUBLISHABLE_KEY", "")}\"",
+            quotedBuildConfig(supabasePublishableKey),
         )
+    }
+
+    signingConfigs {
+        create("release") {
+            if (hasReleaseSigningConfig) {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
     }
 
     buildTypes {
         release {
             isMinifyEnabled = false
+            if (hasReleaseSigningConfig) {
+                signingConfig = signingConfigs.getByName("release")
+            }
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro",

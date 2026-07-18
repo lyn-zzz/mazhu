@@ -2,16 +2,18 @@
 
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
-import { chmod, mkdir, readFile, unlink, writeFile } from "node:fs/promises";
+import { chmod, mkdir, readFile, stat, unlink, writeFile } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { homedir } from "node:os";
 
 const MAZHU_DIR = join(homedir(), ".mazhu");
 const SESSION_FILE = join(MAZHU_DIR, "session.json");
+const SESSION_LOCK_FILE = join(MAZHU_DIR, "session.lock");
 const MODEL_CONFIG_FILE = join(MAZHU_DIR, "config.json");
 const DEFAULT_LIMIT = 20;
 const MAX_SUMMARY_INPUT_CHARS = 24_000;
+const SESSION_LOCK_STALE_MS = 15_000;
 
 type AppConfig = {
   supabaseUrl: string;
@@ -66,10 +68,17 @@ type BookmarkRow = {
 type BookmarkCollectionRow = {
   bookmark_id: string;
   collection_id: string;
+  created_at?: string;
 };
 
 type CollectionWithCount = CollectionRow & {
   article_count: number;
+};
+
+type CollectionsContext = {
+  collections: CollectionRow[];
+  collectionById: Map<string, CollectionRow>;
+  collectionIdsByBookmarkId: Map<string, string[]>;
 };
 
 type SummaryResult = {
@@ -98,8 +107,7 @@ async function main() {
         await configureModel(args);
         break;
       case "collections":
-      case "folders":
-        await listCollections(config);
+        await listCollections(config, args);
         break;
       case "search":
         await searchBookmarks(config, args);
@@ -139,7 +147,7 @@ async function loadConfig(): Promise<AppConfig> {
   const localPropertiesPath = resolve("android", "local.properties");
   if (!existsSync(localPropertiesPath)) {
     throw new Error(
-      "找不到 Supabase 配置。请在项目根目录运行，或设置 MAZHU_SUPABASE_URL 和 MAZHU_SUPABASE_PUBLISHABLE_KEY。",
+      "找不到 Supabase 配置。请设置 MAZHU_SUPABASE_URL 和 MAZHU_SUPABASE_PUBLISHABLE_KEY，或在项目根目录提供 android/local.properties。",
     );
   }
 
@@ -254,8 +262,9 @@ async function configureModel(args: string[]) {
   console.log(`模型配置已保存到 ${MODEL_CONFIG_FILE}`);
 }
 
-async function listCollections(config: AppConfig) {
+async function listCollections(config: AppConfig, args: string[]) {
   const session = await requireSession(config);
+  const { json } = parseListArgs(args);
   const collections = await requestJson<CollectionRow[]>(
     config,
     "/rest/v1/collections?select=id,name,created_at&order=created_at.asc",
@@ -273,6 +282,11 @@ async function listCollections(config: AppConfig) {
     article_count: counts.get(collection.id) ?? 0,
   }));
 
+  if (json) {
+    printJson({ collections: rows });
+    return;
+  }
+
   if (rows.length === 0) {
     console.log("暂无收藏夹。");
     return;
@@ -284,17 +298,9 @@ async function listCollections(config: AppConfig) {
 
 async function searchBookmarks(config: AppConfig, args: string[]) {
   const session = await requireSession(config);
-  const { query, limit, collection } = parseSearchArgs(args);
-  const collections = await requestJson<CollectionRow[]>(
-    config,
-    "/rest/v1/collections?select=id,name",
-    {
-      accessToken: session.accessToken,
-    },
-  );
-  const collectionById = new Map(collections.map((item) => [item.id, item]));
-  const relations = await getBookmarkCollectionRows(config, session);
-  const collectionIdsByBookmarkId = groupCollectionIdsByBookmarkId(relations);
+  const { query, limit, collection, json } = parseSearchArgs(args);
+  const { collections, collectionById, collectionIdsByBookmarkId } =
+    await getCollectionsContext(config, session);
   const collectionFilter = collection
     ? collections.find((item) => item.name === collection || item.id === collection)
     : undefined;
@@ -306,7 +312,24 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
   const params = new URLSearchParams();
   params.set(
     "select",
-    "id,title,account_name,original_url,collection_id,parse_status,published_at,created_at,ai_summary,ai_topics,summary_status",
+    [
+      "id",
+      "title",
+      "account_name",
+      "original_url",
+      "normalized_url",
+      "cover_url",
+      "collection_id",
+      "parse_status",
+      "published_at",
+      "created_at",
+      "ai_summary",
+      "ai_key_points",
+      "ai_topics",
+      "ai_links",
+      "summary_status",
+      "content_quality_status",
+    ].join(","),
   );
   params.set("order", "created_at.desc");
   params.set("limit", "1000");
@@ -346,6 +369,23 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
     })
     .slice(0, limit);
 
+  if (json) {
+    printJson({
+      query,
+      collection: collectionFilter
+        ? {
+            id: collectionFilter.id,
+            name: collectionFilter.name,
+          }
+        : null,
+      count: bookmarks.length,
+      bookmarks: bookmarks.map((bookmark) =>
+        formatBookmarkForAgent(bookmark, collectionIdsByBookmarkId, collectionById, false),
+      ),
+    });
+    return;
+  }
+
   if (bookmarks.length === 0) {
     console.log("没有找到匹配文章。");
     return;
@@ -363,7 +403,29 @@ async function searchBookmarks(config: AppConfig, args: string[]) {
     } else {
       console.log(`  摘要：${bookmark.summary_status === "failed" ? "生成失败" : "未生成"}`);
     }
+    if (bookmark.ai_topics?.length) {
+      console.log(`  Topics：${bookmark.ai_topics.join("、")}`);
+    }
   }
+}
+
+async function getCollectionsContext(
+  config: AppConfig,
+  session: Session,
+): Promise<CollectionsContext> {
+  const collections = await requestJson<CollectionRow[]>(
+    config,
+    "/rest/v1/collections?select=id,name,created_at",
+    {
+      accessToken: session.accessToken,
+    },
+  );
+  const relations = await getBookmarkCollectionRows(config, session);
+  return {
+    collections,
+    collectionById: new Map(collections.map((item) => [item.id, item])),
+    collectionIdsByBookmarkId: groupCollectionIdsByBookmarkId(relations),
+  };
 }
 
 async function getBookmarkCollectionRows(
@@ -402,20 +464,46 @@ function getCollectionNames(
 }
 
 async function readBookmark(config: AppConfig, args: string[]) {
-  const idOrPrefix = args[0];
+  const { idOrPrefix, json } = parseReadArgs(args);
   if (!idOrPrefix) {
-    throw new Error("用法：mazhu read <文章ID或前缀>");
+    throw new Error("用法：mazhu read <文章ID或前缀> [--json]");
   }
 
   const session = await requireSession(config);
   const bookmark = await findOneBookmark(config, session, idOrPrefix);
+  const { collectionById, collectionIdsByBookmarkId } = await getCollectionsContext(config, session);
+
+  if (json) {
+    printJson({
+      bookmark: formatBookmarkForAgent(
+        bookmark,
+        collectionIdsByBookmarkId,
+        collectionById,
+        true,
+      ),
+    });
+    return;
+  }
+
   console.log(`# ${bookmark.title}`);
   console.log("");
   console.log(`公众号：${bookmark.account_name ?? "未知"}`);
   console.log(`链接：${bookmark.original_url}`);
+  console.log(`收藏夹：${getCollectionNames(bookmark, collectionIdsByBookmarkId, collectionById).join(" / ")}`);
   console.log(`解析状态：${bookmark.parse_status}`);
+  console.log(`摘要状态：${bookmark.summary_status ?? "pending"}`);
+  if (bookmark.cover_url) {
+    console.log(`封面：${bookmark.cover_url}`);
+  }
   if (bookmark.ai_summary) {
     console.log(`摘要：${bookmark.ai_summary}`);
+  }
+  if (bookmark.ai_key_points?.length) {
+    console.log("");
+    console.log("要点：");
+    for (const point of bookmark.ai_key_points) {
+      console.log(`- ${point}`);
+    }
   }
   console.log("");
   console.log(bookmark.content_text?.trim() || "暂无正文。");
@@ -483,10 +571,15 @@ async function summarizeBookmarks(config: AppConfig, args: string[]) {
 function parseSearchArgs(args: string[]) {
   let limit = DEFAULT_LIMIT;
   let collection: string | undefined;
+  let json = false;
   const queryParts: string[] = [];
 
   for (let index = 0; index < args.length; index += 1) {
     const arg = args[index];
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
     if (arg === "--limit" || arg === "-n") {
       limit = Number(args[++index]);
       continue;
@@ -506,7 +599,29 @@ function parseSearchArgs(args: string[]) {
     query: queryParts.join(" ").trim(),
     limit,
     collection,
+    json,
   };
+}
+
+function parseListArgs(args: string[]) {
+  return {
+    json: args.includes("--json"),
+  };
+}
+
+function parseReadArgs(args: string[]) {
+  let json = false;
+  let idOrPrefix: string | undefined;
+
+  for (const arg of args) {
+    if (arg === "--json") {
+      json = true;
+      continue;
+    }
+    idOrPrefix = arg;
+  }
+
+  return { idOrPrefix, json };
 }
 
 function parseSummarizeArgs(args: string[]) {
@@ -625,6 +740,38 @@ async function findOneBookmark(
     throw new Error(`匹配到多篇文章，请使用更长 ID：${bookmarks.map((item) => item.id).join(", ")}`);
   }
   return bookmarks[0];
+}
+
+function formatBookmarkForAgent(
+  bookmark: BookmarkRow,
+  collectionIdsByBookmarkId: Map<string, string[]>,
+  collectionById: Map<string, CollectionRow>,
+  includeContent: boolean,
+) {
+  const collectionIds = collectionIdsByBookmarkId.get(bookmark.id) ?? [bookmark.collection_id];
+  return {
+    id: bookmark.id,
+    short_id: bookmark.id.slice(0, 8),
+    title: bookmark.title,
+    account_name: bookmark.account_name,
+    original_url: bookmark.original_url,
+    normalized_url: bookmark.normalized_url,
+    cover_url: bookmark.cover_url,
+    collections: collectionIds.map((id) => ({
+      id,
+      name: collectionById.get(id)?.name ?? id,
+    })),
+    published_at: bookmark.published_at,
+    created_at: bookmark.created_at,
+    parse_status: bookmark.parse_status,
+    summary_status: bookmark.summary_status ?? "pending",
+    content_quality_status: bookmark.content_quality_status ?? "unchecked",
+    ai_summary: bookmark.ai_summary ?? null,
+    ai_key_points: bookmark.ai_key_points ?? [],
+    ai_topics: bookmark.ai_topics ?? [],
+    ai_links: bookmark.ai_links ?? [],
+    content_text: includeContent ? bookmark.content_text ?? "" : undefined,
+  };
 }
 
 function validateContentQuality(bookmark: BookmarkRow): { ok: true } | { ok: false; reason: string } {
@@ -747,16 +894,86 @@ async function requireSession(config: AppConfig): Promise<Session> {
     return session;
   }
 
-  const response = await requestJson(config, "/auth/v1/token?grant_type=refresh_token", {
-    method: "POST",
-    body: {
-      refresh_token: session.refreshToken,
-    },
-  });
-  const refreshed = parseSession(response);
-  await saveSession(refreshed);
-  return refreshed;
+  return refreshSessionWithLock(config);
 }
+
+async function refreshSessionWithLock(config: AppConfig): Promise<Session> {
+  for (let attempt = 0; attempt < 80; attempt += 1) {
+    if (await tryAcquireSessionLock()) {
+      try {
+        const latest = await loadSession();
+        if (!latest) {
+          throw new Error("请先运行 mazhu login。");
+        }
+        if (!needsRefresh(latest)) {
+          return latest;
+        }
+
+        const response = await requestJson(config, "/auth/v1/token?grant_type=refresh_token", {
+          method: "POST",
+          body: {
+            refresh_token: latest.refreshToken,
+          },
+        }).catch((error) => {
+          const message = error instanceof Error ? error.message : String(error);
+          if (/invalid refresh token|already used|refresh token/i.test(message)) {
+            throw new Error("登录会话已失效，请重新运行 mazhu login。");
+          }
+          throw error;
+        });
+        const refreshed = parseSession(response);
+        await saveSession(refreshed);
+        return refreshed;
+      } finally {
+        await releaseSessionLock();
+      }
+    }
+
+    await delay(250);
+    const latest = await loadSession();
+    if (latest && !needsRefresh(latest)) {
+      return latest;
+    }
+  }
+
+  throw new Error("等待登录会话刷新超时，请稍后重试。");
+}
+
+async function tryAcquireSessionLock(): Promise<boolean> {
+  await mkdir(MAZHU_DIR, { recursive: true });
+  try {
+    await writeFile(SESSION_LOCK_FILE, `${process.pid}\n${Date.now()}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    return true;
+  } catch (error) {
+    if (!isNodeError(error) || error.code !== "EEXIST") {
+      throw error;
+    }
+  }
+
+  const lockStat = await stat(SESSION_LOCK_FILE).catch(() => null);
+  if (lockStat && Date.now() - lockStat.mtimeMs > SESSION_LOCK_STALE_MS) {
+    await unlink(SESSION_LOCK_FILE).catch(() => undefined);
+  }
+  return false;
+}
+
+async function releaseSessionLock() {
+  await unlink(SESSION_LOCK_FILE).catch(() => undefined);
+}
+
+function delay(ms: number): Promise<void> {
+  return new Promise((resolveDelay) => {
+    setTimeout(resolveDelay, ms);
+  });
+}
+
+function isNodeError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error && "code" in error;
+}
+
 
 function needsRefresh(session: Session) {
   return session.expiresAtEpochSeconds <= Math.floor(Date.now() / 1000) + 60;
@@ -861,6 +1078,10 @@ function parseErrorMessage(text: string) {
   }
 }
 
+function printJson(value: unknown) {
+  console.log(JSON.stringify(value, null, 2));
+}
+
 function parseFlags(args: string[]) {
   const flags: Record<string, string> = {};
   for (let index = 0; index < args.length; index += 1) {
@@ -943,16 +1164,19 @@ function printHelp() {
   mazhu config set                         配置 OpenAI-compatible 摘要模型
   mazhu config show                        查看模型配置
   mazhu collections                        列出收藏夹
+  mazhu collections --json                 以 JSON 列出收藏夹，适合 agent 使用
   mazhu search [关键词]                    搜索文章标题、公众号、链接、收藏夹和摘要
+  mazhu search GitHub --json               以 JSON 返回搜索结果和摘要字段
   mazhu search UI --collection UI/UX       在指定收藏夹内搜索
   mazhu read <文章ID前缀>                  读取文章全文
+  mazhu read <文章ID前缀> --json           以 JSON 返回全文、摘要和引用信息
   mazhu summarize --all                    为未摘要文章生成摘要
   mazhu summarize <文章ID前缀>             为单篇文章生成摘要
   mazhu summarize --collection UI/UX       为指定收藏夹生成摘要
   mazhu summarize --all --force            重新生成摘要
 
 配置：
-  Supabase 默认读取 android/local.properties。
+  Supabase 优先读取 MAZHU_SUPABASE_URL 和 MAZHU_SUPABASE_PUBLISHABLE_KEY，未设置时读取 android/local.properties。
   模型配置保存在 ~/.mazhu/config.json。
   也可以设置 MAZHU_MODEL_BASE_URL、MAZHU_MODEL_API_KEY、MAZHU_MODEL_NAME。
 `);
