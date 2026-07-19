@@ -10,15 +10,21 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.outlined.CloudDone
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Visibility
+import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TextField
@@ -30,7 +36,10 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.lyn.mazhu.data.CollectionSummary
@@ -41,6 +50,11 @@ import com.lyn.mazhu.supabase.SupabaseSession
 private enum class AuthMode {
     SIGN_IN,
     SIGN_UP,
+}
+
+private fun looksLikeEmail(value: String): Boolean {
+    val trimmed = value.trim()
+    return trimmed.contains("@") && trimmed.substringAfter("@").contains(".")
 }
 
 @Composable
@@ -238,8 +252,23 @@ internal fun AuthDialog(
     var mode by remember { mutableStateOf(AuthMode.SIGN_IN) }
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
+    var confirmPassword by remember { mutableStateOf("") }
+    var passwordVisible by remember { mutableStateOf(false) }
+    var confirmPasswordVisible by remember { mutableStateOf(false) }
     var loading by remember { mutableStateOf(false) }
     var message by remember { mutableStateOf<String?>(null) }
+    var successMessage by remember { mutableStateOf(false) }
+    val isSignIn = mode == AuthMode.SIGN_IN
+
+    fun setMode(nextMode: AuthMode) {
+        mode = nextMode
+        password = ""
+        confirmPassword = ""
+        passwordVisible = false
+        confirmPasswordVisible = false
+        message = null
+        successMessage = false
+    }
 
     fun handleResult(result: AuthResult) {
         loading = false
@@ -247,9 +276,39 @@ internal fun AuthDialog(
             is AuthResult.Authenticated -> onDismiss()
             AuthResult.EmailVerificationRequired -> {
                 mode = AuthMode.SIGN_IN
-                message = "注册邮件已发送，请验证邮箱后返回登录"
+                password = ""
+                confirmPassword = ""
+                passwordVisible = false
+                confirmPasswordVisible = false
+                successMessage = true
+                message = "验证邮件已发送。若该邮箱已注册，请直接登录。"
             }
-            is AuthResult.Failed -> message = result.message
+            is AuthResult.Failed -> {
+                successMessage = false
+                message = result.message.ifBlank {
+                    if (isSignIn) "登录失败，请检查邮箱和密码" else "注册失败，请稍后重试"
+                }
+            }
+        }
+    }
+
+    fun submit() {
+        val normalizedEmail = email.trim()
+        successMessage = false
+        message = when {
+            !looksLikeEmail(normalizedEmail) -> "请输入有效邮箱"
+            password.length < 6 -> "密码至少需要 6 位"
+            !isSignIn && password != confirmPassword -> "两次输入的密码不一致"
+            else -> null
+        }
+        if (message != null) {
+            return
+        }
+        loading = true
+        if (isSignIn) {
+            onSignIn(normalizedEmail, password, ::handleResult)
+        } else {
+            onSignUp(normalizedEmail, password, ::handleResult)
         }
     }
 
@@ -260,42 +319,121 @@ internal fun AuthDialog(
             }
         },
         title = {
-            Text(if (mode == AuthMode.SIGN_IN) "登录云同步" else "注册云同步账号")
+            Text(if (isSignIn) "登录码住" else "创建码住账号")
         },
         text = {
             Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 Text(
-                    text = "账号只用于同步你的收藏数据，本地收藏不依赖登录。",
+                    text = if (isSignIn) {
+                        "登录后可把收藏同步到云端，本地收藏仍会保存在手机里。"
+                    } else {
+                        "创建账号后需要验证邮箱，再返回码住登录同步。"
+                    },
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextField(
+                OutlinedTextField(
                     value = email,
                     onValueChange = {
                         email = it
                         message = null
+                        successMessage = false
                     },
                     label = { Text("邮箱") },
                     singleLine = true,
                     enabled = !loading,
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Email,
+                        imeAction = ImeAction.Next,
+                    ),
                     modifier = Modifier.fillMaxWidth(),
                 )
-                TextField(
+                OutlinedTextField(
                     value = password,
                     onValueChange = {
                         password = it
                         message = null
+                        successMessage = false
                     },
                     label = { Text("密码（至少 6 位）") },
                     singleLine = true,
                     enabled = !loading,
-                    visualTransformation = PasswordVisualTransformation(),
+                    visualTransformation = if (passwordVisible) {
+                        VisualTransformation.None
+                    } else {
+                        PasswordVisualTransformation()
+                    },
+                    keyboardOptions = KeyboardOptions(
+                        keyboardType = KeyboardType.Password,
+                        imeAction = if (isSignIn) ImeAction.Done else ImeAction.Next,
+                    ),
+                    trailingIcon = {
+                        IconButton(
+                            onClick = { passwordVisible = !passwordVisible },
+                            enabled = !loading,
+                        ) {
+                            Icon(
+                                imageVector = if (passwordVisible) {
+                                    Icons.Outlined.VisibilityOff
+                                } else {
+                                    Icons.Outlined.Visibility
+                                },
+                                contentDescription = if (passwordVisible) {
+                                    "隐藏密码"
+                                } else {
+                                    "显示密码"
+                                },
+                            )
+                        }
+                    },
                     modifier = Modifier.fillMaxWidth(),
                 )
+                if (!isSignIn) {
+                    OutlinedTextField(
+                        value = confirmPassword,
+                        onValueChange = {
+                            confirmPassword = it
+                            message = null
+                            successMessage = false
+                        },
+                        label = { Text("确认密码") },
+                        singleLine = true,
+                        enabled = !loading,
+                        visualTransformation = if (confirmPasswordVisible) {
+                            VisualTransformation.None
+                        } else {
+                            PasswordVisualTransformation()
+                        },
+                        keyboardOptions = KeyboardOptions(
+                            keyboardType = KeyboardType.Password,
+                            imeAction = ImeAction.Done,
+                        ),
+                        trailingIcon = {
+                            IconButton(
+                                onClick = { confirmPasswordVisible = !confirmPasswordVisible },
+                                enabled = !loading,
+                            ) {
+                                Icon(
+                                    imageVector = if (confirmPasswordVisible) {
+                                        Icons.Outlined.VisibilityOff
+                                    } else {
+                                        Icons.Outlined.Visibility
+                                    },
+                                    contentDescription = if (confirmPasswordVisible) {
+                                        "隐藏确认密码"
+                                    } else {
+                                        "显示确认密码"
+                                    },
+                                )
+                            }
+                        },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                }
                 message?.let {
                     Text(
                         text = it,
-                        color = if (it.startsWith("注册邮件")) {
+                        color = if (successMessage) {
                             MaterialTheme.colorScheme.primary
                         } else {
                             MaterialTheme.colorScheme.error
@@ -305,39 +443,33 @@ internal fun AuthDialog(
                 }
                 TextButton(
                     onClick = {
-                        mode = if (mode == AuthMode.SIGN_IN) {
-                            AuthMode.SIGN_UP
-                        } else {
-                            AuthMode.SIGN_IN
-                        }
-                        message = null
+                        setMode(
+                            if (isSignIn) {
+                                AuthMode.SIGN_UP
+                            } else {
+                                AuthMode.SIGN_IN
+                            },
+                        )
                     },
                     enabled = !loading,
                 ) {
                     Text(
-                        if (mode == AuthMode.SIGN_IN) {
-                            "还没有账号？注册"
+                        if (isSignIn) {
+                            "还没有账号？创建账号"
                         } else {
-                            "已经有账号？登录"
+                            "已有账号？返回登录"
                         },
                     )
                 }
             }
         },
         confirmButton = {
-            TextButton(
-                onClick = {
-                    loading = true
-                    message = null
-                    if (mode == AuthMode.SIGN_IN) {
-                        onSignIn(email, password, ::handleResult)
-                    } else {
-                        onSignUp(email, password, ::handleResult)
-                    }
-                },
+            Button(
+                onClick = ::submit,
                 enabled = !loading &&
                     email.isNotBlank() &&
-                    password.length >= 6,
+                    password.isNotBlank() &&
+                    (isSignIn || confirmPassword.isNotBlank()),
             ) {
                 if (loading) {
                     CircularProgressIndicator(
@@ -345,7 +477,7 @@ internal fun AuthDialog(
                         strokeWidth = 2.dp,
                     )
                 } else {
-                    Text(if (mode == AuthMode.SIGN_IN) "登录" else "注册")
+                    Text(if (isSignIn) "登录" else "创建账号")
                 }
             }
         },

@@ -23,6 +23,9 @@ internal fun copyToClipboard(
 ) {
     val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
     clipboard.setPrimaryClip(ClipData.newPlainText("文章链接", text))
+    detectWechatClipboardLink(context)?.let { link ->
+        markClipboardLinkSuppressed(context, link)
+    }
 }
 
 internal fun detectWechatClipboardLink(context: Context): ClipboardWechatLink? {
@@ -52,7 +55,10 @@ internal fun wasClipboardLinkHandled(
     link: ClipboardWechatLink,
 ): Boolean {
     val preferences = context.getSharedPreferences("clipboard_prompt", Context.MODE_PRIVATE)
-    return preferences.getString("last_token", null) == link.token
+    val handled = preferences.getString("last_token", null) == link.token
+    val suppressed = preferences.getString("suppressed_token", null) == link.token &&
+        System.currentTimeMillis() - preferences.getLong("suppressed_at", 0L) < SELF_COPIED_LINK_IGNORE_MS
+    return handled || suppressed
 }
 
 internal fun markClipboardLinkHandled(
@@ -64,3 +70,16 @@ internal fun markClipboardLinkHandled(
         .putString("last_token", link.token)
         .apply()
 }
+
+private fun markClipboardLinkSuppressed(
+    context: Context,
+    link: ClipboardWechatLink,
+) {
+    context.getSharedPreferences("clipboard_prompt", Context.MODE_PRIVATE)
+        .edit()
+        .putString("suppressed_token", link.token)
+        .putLong("suppressed_at", System.currentTimeMillis())
+        .apply()
+}
+
+private const val SELF_COPIED_LINK_IGNORE_MS = 60_000L
