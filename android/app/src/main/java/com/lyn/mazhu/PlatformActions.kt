@@ -12,9 +12,21 @@ internal fun openBookmark(
     context: Context,
     bookmark: Bookmark,
 ) {
-    context.startActivity(
-        Intent(Intent.ACTION_VIEW, Uri.parse(bookmark.originalUrl)),
-    )
+    openExternalUrl(context, bookmark.originalUrl)
+}
+
+internal fun openExternalUrl(
+    context: Context,
+    url: String,
+) {
+    if (url.isBlank()) {
+        return
+    }
+    runCatching {
+        context.startActivity(
+            Intent(Intent.ACTION_VIEW, Uri.parse(url)),
+        )
+    }
 }
 
 internal fun copyToClipboard(

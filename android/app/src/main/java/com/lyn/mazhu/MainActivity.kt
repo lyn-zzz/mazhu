@@ -193,6 +193,11 @@ private data class DeleteBookmarkTarget(
     val fromCollectionOnly: Boolean,
 )
 
+private data class ReaderTarget(
+    val title: String,
+    val url: String,
+)
+
 private data class BatchDeleteBookmarkTarget(
     val bookmarkIds: List<String>,
     val fromCollectionOnly: Boolean,
@@ -250,6 +255,7 @@ private fun MazhuApp(
     var deleteTarget by remember { mutableStateOf<CollectionSummary?>(null) }
     var actionTarget by remember { mutableStateOf<Bookmark?>(null) }
     var deleteBookmarkTarget by remember { mutableStateOf<DeleteBookmarkTarget?>(null) }
+    var readerTarget by remember { mutableStateOf<ReaderTarget?>(null) }
     var collectionPickerTarget by remember { mutableStateOf<CollectionPickerTarget?>(null) }
     var batchCollectionPickerTarget by remember { mutableStateOf<BatchCollectionPickerTarget?>(null) }
     var batchDeleteBookmarkTarget by remember { mutableStateOf<BatchDeleteBookmarkTarget?>(null) }
@@ -393,6 +399,12 @@ private fun MazhuApp(
         onRenameCollection = { renameTarget = it },
         onDeleteCollection = { deleteTarget = it },
         onReorderCollections = viewModel::reorderCollections,
+        onOpenBookmark = { bookmark ->
+            readerTarget = ReaderTarget(
+                title = bookmark.title,
+                url = bookmark.originalUrl,
+            )
+        },
         onBookmarkMenu = { actionTarget = it },
         onBatchMove = { bookmarkIds ->
             batchCollectionPickerTarget = BatchCollectionPickerTarget(
@@ -444,10 +456,24 @@ private fun MazhuApp(
             } else {
                 "以上为当前收藏夹的搜索结果"
             },
+            onOpenBookmark = { bookmark ->
+                readerTarget = ReaderTarget(
+                    title = bookmark.title,
+                    url = bookmark.originalUrl,
+                )
+            },
             onDismiss = {
                 showSearchPage = false
                 searchCollectionId = null
             },
+        )
+    }
+
+    readerTarget?.let { target ->
+        WebViewReaderScreen(
+            title = target.title,
+            url = target.url,
+            onDismiss = { readerTarget = null },
         )
     }
 
@@ -908,6 +934,7 @@ private fun MainContent(
     onRenameCollection: (CollectionSummary) -> Unit,
     onDeleteCollection: (CollectionSummary) -> Unit,
     onReorderCollections: (List<String>) -> Unit,
+    onOpenBookmark: (Bookmark) -> Unit,
     onBookmarkMenu: (Bookmark) -> Unit,
     onBatchMove: (List<String>) -> Unit,
     onBatchCopy: (List<String>) -> Unit,
@@ -915,7 +942,6 @@ private fun MainContent(
     onBatchRemoveFromCollection: (List<String>) -> Unit,
     onBatchDeleteCompletely: (List<String>) -> Unit,
 ) {
-    val context = LocalContext.current
     val firstCoverByCollectionId = remember(collections, bookmarks, bookmarkCollectionIds) {
         collections.associate { collection ->
             val ids = bookmarkCollectionIds
@@ -1198,7 +1224,7 @@ private fun MainContent(
                                             selectedBookmarkIds + bookmark.id
                                         }
                                     } else {
-                                        openBookmark(context, bookmark)
+                                        onOpenBookmark(bookmark)
                                     }
                                 },
                                 onLongClick = {
@@ -1311,6 +1337,7 @@ private fun MainContent(
                                         collectionNames = bookmarkCollectionIds[bookmark.id]
                                             .orEmpty()
                                             .mapNotNull { collectionById[it]?.name },
+                                        onClick = { onOpenBookmark(bookmark) },
                                         onMenu = { onBookmarkMenu(bookmark) },
                                     )
                                 }

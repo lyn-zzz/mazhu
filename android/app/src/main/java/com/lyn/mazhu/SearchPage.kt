@@ -1,7 +1,4 @@
 package com.lyn.mazhu
-
-import android.content.Intent
-import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -67,6 +64,7 @@ internal fun SearchPage(
     collectionById: Map<String, CollectionSummary>,
     placeholder: String,
     resultFooter: String,
+    onOpenBookmark: (Bookmark) -> Unit,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
@@ -215,6 +213,7 @@ internal fun SearchPage(
                             collectionNames = bookmarkCollectionIds[bookmark.id]
                                 .orEmpty()
                                 .mapNotNull { collectionById[it]?.name },
+                            onClick = { onOpenBookmark(bookmark) },
                         )
                     }
                     item {
@@ -270,17 +269,12 @@ private fun SearchHistoryRow(
 private fun SearchResultRow(
     bookmark: Bookmark,
     collectionNames: List<String>,
+    onClick: () -> Unit,
 ) {
-    val context = LocalContext.current
-
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable {
-                context.startActivity(
-                    Intent(Intent.ACTION_VIEW, Uri.parse(bookmark.originalUrl)),
-                )
-            }
+            .clickable(onClick = onClick)
             .padding(vertical = 12.dp),
     ) {
         RemoteCoverImage(
