@@ -196,6 +196,7 @@ private data class DeleteBookmarkTarget(
 private data class ReaderTarget(
     val title: String,
     val url: String,
+    val sessionId: Long = System.nanoTime(),
 )
 
 private data class BatchDeleteBookmarkTarget(
@@ -473,6 +474,7 @@ private fun MazhuApp(
         WebViewReaderScreen(
             title = target.title,
             url = target.url,
+            sessionId = target.sessionId,
             onDismiss = { readerTarget = null },
         )
     }

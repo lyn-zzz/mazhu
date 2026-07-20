@@ -49,29 +49,40 @@ private const val WECHAT_ARTICLE_REFERER = "https://mp.weixin.qq.com/"
 private const val WECHAT_ANDROID_USER_AGENT =
     "Mozilla/5.0 (Linux; Android 16; Mobile) AppleWebKit/537.36 " +
         "Chrome/135.0 Mobile Safari/537.36 MicroMessenger/8.0.58"
+private const val RESET_SCROLL_SCRIPT =
+    "if ('scrollRestoration' in history) history.scrollRestoration = 'manual';" +
+        "window.scrollTo(0, 0);" +
+        "document.documentElement.scrollTop = 0;" +
+        "document.body.scrollTop = 0;"
+private const val REVEAL_READER_DELAY_MS = 760L
+private const val REVEAL_READER_ANIMATION_MS = 140L
 
 @SuppressLint("SetJavaScriptEnabled")
 @Composable
 internal fun WebViewReaderScreen(
     title: String,
     url: String,
+    sessionId: Long,
     onDismiss: () -> Unit,
 ) {
     val context = LocalContext.current
-    var progress by remember(url) { mutableIntStateOf(0) }
-    var isLoading by remember(url) { mutableStateOf(true) }
-    var canGoBack by remember(url) { mutableStateOf(false) }
+    var progress by remember(sessionId) { mutableIntStateOf(0) }
+    var isLoading by remember(sessionId) { mutableStateOf(true) }
+    var canGoBack by remember(sessionId) { mutableStateOf(false) }
+    var hasResetInitialScroll by remember(sessionId) { mutableStateOf(false) }
+    var isContentReady by remember(sessionId) { mutableStateOf(false) }
     val cookieManager = remember {
         CookieManager.getInstance().apply {
             setAcceptCookie(true)
         }
     }
-    val webView = remember(url) {
+    val webView = remember(sessionId) {
         WebView(context).apply {
             layoutParams = ViewGroup.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT,
                 ViewGroup.LayoutParams.MATCH_PARENT,
             )
+            alpha = 0f
             settings.javaScriptEnabled = true
             settings.domStorageEnabled = true
             settings.cacheMode = WebSettings.LOAD_DEFAULT
@@ -109,6 +120,12 @@ internal fun WebViewReaderScreen(
                 override fun onPageFinished(view: WebView?, url: String?) {
                     isLoading = false
                     canGoBack = view?.canGoBack() == true
+                    if (!hasResetInitialScroll && view != null) {
+                        hasResetInitialScroll = true
+                        view.resetInitialScroll {
+                            isContentReady = true
+                        }
+                    }
                 }
             }
             loadUrl(
@@ -142,7 +159,7 @@ internal fun WebViewReaderScreen(
             ReaderTopBar(
                 title = title,
                 url = url,
-                loading = isLoading,
+                loading = isLoading || !isContentReady,
                 progress = progress,
                 onBack = {
                     if (canGoBack && webView.canGoBack()) {
@@ -159,7 +176,7 @@ internal fun WebViewReaderScreen(
                     factory = { webView },
                     modifier = Modifier.fillMaxSize(),
                 )
-                if (isLoading && progress == 0) {
+                if (!isContentReady) {
                     CircularProgressIndicator(
                         modifier = Modifier.align(Alignment.Center),
                     )
@@ -167,6 +184,22 @@ internal fun WebViewReaderScreen(
             }
         }
     }
+}
+
+private fun WebView.resetInitialScroll(onReady: () -> Unit) {
+    evaluateJavascript(RESET_SCROLL_SCRIPT, null)
+    postDelayed({ evaluateJavascript(RESET_SCROLL_SCRIPT, null) }, 250)
+    postDelayed({ evaluateJavascript(RESET_SCROLL_SCRIPT, null) }, 700)
+    postDelayed(
+        {
+            onReady()
+            animate()
+                .alpha(1f)
+                .setDuration(REVEAL_READER_ANIMATION_MS)
+                .start()
+        },
+        REVEAL_READER_DELAY_MS,
+    )
 }
 
 @Composable
