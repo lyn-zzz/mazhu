@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="theme-color" content="#f8fbf8" />
+    <meta
+      name="description"
+      content="码住是一个微信公众号文章收藏夹，支持快速收藏、云同步和配套 AI Skill 问答。"
+    />
+    <title>码住 - 微信公众号文章收藏夹</title>
+    <link rel="icon" href="./assets/app-icon.png" />
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <main class="page-shell">
+      <section class="hero" aria-label="码住下载页">
+        <div class="hero-copy">
+          <div class="hero-head">
+            <img class="wordmark" src="./assets/mazhu-logo.png" alt="码住" />
+          </div>
+          <p class="eyebrow">微信公众号文章收藏夹</p>
+          <h1>看到好文章，<br />先码住。</h1>
+          <p class="lede">
+            把感兴趣的公众号文章存入自己的收藏夹，让 Codex、<br class="mobile-only" />Claude Code 基于你的收藏夹进行问答。
+          </p>
+          <div class="actions">
+            <a id="downloadButton" class="button primary" href="./download.html">
+              <span class="desktop-label">立即扫码安装</span>
+              <span class="mobile-label">立即安装</span>
+            </a>
+            <a class="button secondary" href="https://github.com/lyn-zzz/mazhu">查看 GitHub</a>
+          </div>
+          <p class="install-note">目前仅支持 Android，暂未上架应用商店。</p>
+          <p id="versionLine" class="version-line" aria-live="polite"></p>
+        </div>
+
+        <div class="product-preview" aria-label="码住界面概念预览">
+          <div class="phone-frame">
+            <div class="phone-speaker" aria-hidden="true"></div>
+            <div class="phone-screen">
+              <header class="mock-topbar">
+                <img src="./assets/mazhu-logo.png" alt="" />
+                <div class="mock-icons" aria-hidden="true">
+                  <span></span><span></span><span></span>
+                </div>
+              </header>
+              <div class="mock-tabs" aria-hidden="true">
+                <span>收藏夹</span>
+                <span>最近收藏</span>
+              </div>
+              <p class="mock-count">3 个收藏夹 · 12 篇文章</p>
+              <div class="mock-list">
+                <article class="mock-card">
+                  <div class="mock-thumb"></div>
+                  <div>
+                    <h2>AI 工具</h2>
+                    <p><strong>3 篇文章</strong><span>已同步</span></p>
+                  </div>
+                </article>
+                <article class="mock-card">
+                  <div class="mock-thumb accent"></div>
+                  <div>
+                    <h2>UI 设计</h2>
+                    <p><strong>4 篇文章</strong></p>
+                  </div>
+                </article>
+                <article class="mock-card">
+                  <div class="mock-thumb dark"></div>
+                  <div>
+                    <h2>GitHub 项目</h2>
+                    <p><strong>5 篇文章</strong></p>
+                  </div>
+                </article>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="feature-grid" aria-label="核心能力">
+        <article>
+          <span>01</span>
+          <h2>低摩擦收藏</h2>
+          <p>分享给码住，或复制链接后打开 App 自动识别。</p>
+        </article>
+        <article>
+          <span>02</span>
+          <h2>本地优先</h2>
+          <p>网络不好时先保存在手机里，之后再补同步。</p>
+        </article>
+        <article>
+          <span>03</span>
+          <h2>Agent 友好</h2>
+          <p>配套 Skill 支持 Codex、Claude Code 基于收藏内容问答。</p>
+        </article>
+      </section>
+    </main>
+
+    <dialog id="downloadDialog" class="download-dialog" aria-labelledby="downloadDialogTitle">
+      <form method="dialog" class="dialog-card">
+        <button class="dialog-close" value="close" aria-label="关闭下载二维码">×</button>
+        <img class="dialog-qr" src="./assets/download-qr.svg" alt="码住安装二维码" />
+        <h2 id="downloadDialogTitle">手机扫码，直接安装</h2>
+        <p>当前仅支持 Android 系统</p>
+      </form>
+    </dialog>
+
+    <script>
+      const downloadPageUrl = "./download.html";
+      const downloadButton = document.getElementById("downloadButton");
+      const downloadDialog = document.getElementById("downloadDialog");
+      const isCoarsePointer = window.matchMedia("(hover: none) and (pointer: coarse)").matches;
+
+      downloadButton.href = downloadPageUrl;
+      downloadButton.addEventListener("click", (event) => {
+        if (isCoarsePointer) {
+          return;
+        }
+        event.preventDefault();
+        downloadDialog.showModal();
+      });
+
+      downloadDialog.addEventListener("click", (event) => {
+        if (event.target === downloadDialog) {
+          downloadDialog.close();
+        }
+      });
+
+      fetch("./latest.json", { cache: "no-store" })
+        .then((response) => response.json())
+        .then((latest) => {
+          const versionLine = document.getElementById("versionLine");
+          if (latest.versionName) {
+            versionLine.textContent = `最新版本 ${latest.versionName} · ${latest.releasedAt || ""}`.trim();
+          }
+        })
+        .catch(() => {});
+    </script>
+  </body>
+</html>

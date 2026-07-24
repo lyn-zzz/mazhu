@@ -119,6 +119,15 @@ interface BookmarkDao {
     @Query("UPDATE collections SET sortOrder = :sortOrder WHERE id = :collectionId")
     suspend fun updateCollectionSortOrder(collectionId: String, sortOrder: Long)
 
+    @Query(
+        """
+        UPDATE collections
+        SET syncStatus = 'local_only',
+            syncError = NULL
+        """,
+    )
+    suspend fun markAllCollectionsPendingSync()
+
     @Insert(onConflict = OnConflictStrategy.IGNORE)
     suspend fun insertBookmarkCollection(relation: BookmarkCollection): Long
 
@@ -163,6 +172,15 @@ interface BookmarkDao {
     @Query("DELETE FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
     suspend fun deleteBookmarkCollections(bookmarkId: String)
 
+    @Query(
+        """
+        UPDATE bookmark_collections
+        SET syncStatus = 'local_only',
+            syncError = NULL
+        """,
+    )
+    suspend fun markAllBookmarkCollectionsPendingSync()
+
     @Query("SELECT COUNT(*) FROM bookmark_collections WHERE bookmarkId = :bookmarkId")
     suspend fun countBookmarkCollections(bookmarkId: String): Int
 
@@ -175,11 +193,23 @@ interface BookmarkDao {
     @Query("DELETE FROM bookmarks WHERE id = :bookmarkId")
     suspend fun deleteBookmark(bookmarkId: String)
 
+    @Query(
+        """
+        UPDATE bookmarks
+        SET syncStatus = 'local_only',
+            syncError = NULL
+        """,
+    )
+    suspend fun markAllBookmarksPendingSync()
+
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertPendingDeletion(deletion: PendingDeletion)
 
     @Query("DELETE FROM pending_deletions WHERE key = :key")
     suspend fun deletePendingDeletion(key: String)
+
+    @Query("DELETE FROM pending_deletions")
+    suspend fun clearPendingDeletions()
 
     @Query(
         """

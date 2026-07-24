@@ -255,6 +255,15 @@ class BookmarkRepository(
         }
     }
 
+    suspend fun markLocalDataPendingSyncForCurrentCloud() {
+        database.withTransaction {
+            bookmarkDao.clearPendingDeletions()
+            bookmarkDao.markAllCollectionsPendingSync()
+            bookmarkDao.markAllBookmarksPendingSync()
+            bookmarkDao.markAllBookmarkCollectionsPendingSync()
+        }
+    }
+
     companion object {
         const val DEFAULT_COLLECTION_ID = "default"
         const val DEFAULT_COLLECTION_NAME = "默认收藏夹"

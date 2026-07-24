@@ -149,6 +149,7 @@ import com.lyn.mazhu.supabase.AuthResult
 import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
 import com.lyn.mazhu.ui.theme.MazhuTheme
+import com.lyn.mazhu.update.UpdateInfo
 import com.lyn.mazhu.worker.ParseWorkScheduler
 import com.lyn.mazhu.worker.SyncWorkScheduler
 import coil3.compose.AsyncImage
@@ -263,6 +264,7 @@ private fun MazhuApp(
     var showAuthDialog by remember { mutableStateOf(false) }
     var showAccountDialog by remember { mutableStateOf(false) }
     var showSyncSettingsDialog by remember { mutableStateOf(false) }
+    var availableUpdate by remember { mutableStateOf<UpdateInfo?>(null) }
     var clipboardLink by remember { mutableStateOf<ClipboardWechatLink?>(null) }
     var clipboardSaveTarget by remember { mutableStateOf<ClipboardSaveTarget?>(null) }
     val latestClipboardLink by rememberUpdatedState(clipboardLink)
@@ -303,6 +305,13 @@ private fun MazhuApp(
     LaunchedEffect(Unit) {
         delay(120)
         checkClipboardForWechatUrl()
+    }
+
+    LaunchedEffect(Unit) {
+        delay(1_200)
+        viewModel.checkForUpdates { updateInfo ->
+            availableUpdate = updateInfo
+        }
     }
 
     DisposableEffect(lifecycleOwner, view, context) {
@@ -864,6 +873,10 @@ private fun MazhuApp(
     if (showAuthDialog) {
         AuthDialog(
             onDismiss = { showAuthDialog = false },
+            onOpenSyncSettings = {
+                showAuthDialog = false
+                showSyncSettingsDialog = true
+            },
             onSignIn = viewModel::signIn,
             onSignUp = viewModel::signUp,
         )
@@ -873,15 +886,32 @@ private fun MazhuApp(
         SyncSettingsDialog(
             config = supabaseConfig,
             onDismiss = { showSyncSettingsDialog = false },
-            onSave = { url, key ->
-                viewModel.saveSupabaseConfig(url, key) {
+            onSave = { mode, url, key ->
+                viewModel.saveSupabaseConfig(mode, url, key) { canLogin ->
                     showSyncSettingsDialog = false
-                    showAuthDialog = true
+                    showAuthDialog = canLogin && session == null
                 }
             },
-            onReset = {
-                viewModel.resetSupabaseConfig()
-                showSyncSettingsDialog = false
+        )
+    }
+
+    val visibleUpdate = availableUpdate?.takeIf {
+        clipboardLink == null &&
+            clipboardSaveTarget == null &&
+            !showAuthDialog &&
+            !showSyncSettingsDialog &&
+            !showAccountDialog
+    }
+    visibleUpdate?.let { updateInfo ->
+        UpdateAvailableDialog(
+            updateInfo = updateInfo,
+            onDismiss = {
+                viewModel.deferUpdate(updateInfo)
+                availableUpdate = null
+            },
+            onUpdate = {
+                availableUpdate = null
+                openExternalUrl(context, updateInfo.downloadPageUrl)
             },
         )
     }
@@ -900,6 +930,18 @@ private fun MazhuApp(
                     }
                 }
                 showAccountDialog = false
+            },
+            onCheckUpdate = {
+                showAccountDialog = false
+                viewModel.checkForUpdates(force = true) { updateInfo ->
+                    if (updateInfo == null) {
+                        scope.launch {
+                            snackbarHostState.showSnackbar("已是最新版本")
+                        }
+                    } else {
+                        availableUpdate = updateInfo
+                    }
+                }
             },
             onSignOut = {
                 viewModel.signOut()

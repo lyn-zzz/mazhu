@@ -9,11 +9,16 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Check
 import androidx.compose.material.icons.outlined.CloudDone
+import androidx.compose.material.icons.outlined.CloudOff
 import androidx.compose.material.icons.outlined.CloudUpload
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.material.icons.outlined.Visibility
 import androidx.compose.material.icons.outlined.VisibilityOff
 import androidx.compose.material3.AlertDialog
@@ -46,10 +51,61 @@ import com.lyn.mazhu.data.CollectionSummary
 import com.lyn.mazhu.supabase.AuthResult
 import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
+import com.lyn.mazhu.supabase.SupabaseSyncMode
+import com.lyn.mazhu.update.UpdateInfo
+
+
+private fun SupabaseConfig.displayName(): String = when (mode) {
+    SupabaseSyncMode.OFFICIAL -> "官方云同步"
+    SupabaseSyncMode.LOCAL_ONLY -> "仅本机保存"
+    SupabaseSyncMode.CUSTOM -> "自定义云存储"
+}
 
 private enum class AuthMode {
     SIGN_IN,
     SIGN_UP,
+}
+
+@Composable
+internal fun UpdateAvailableDialog(
+    updateInfo: UpdateInfo,
+    onDismiss: () -> Unit,
+    onUpdate: () -> Unit,
+) {
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text("发现新版本 ${updateInfo.versionName}") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                Text(
+                    text = "已发布新版码住。下载后按系统提示确认安装即可完成更新。",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+                if (updateInfo.releaseNotes.isNotEmpty()) {
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        updateInfo.releaseNotes.take(4).forEach { note ->
+                            Text(
+                                text = "• $note",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            )
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = {
+            TextButton(onClick = onUpdate) {
+                Text("去更新")
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text("稍后")
+            }
+        },
+    )
 }
 
 private fun looksLikeEmail(value: String): Boolean {
@@ -188,64 +244,198 @@ internal fun LoginSyncBanner(
 internal fun SyncSettingsDialog(
     config: SupabaseConfig,
     onDismiss: () -> Unit,
-    onSave: (String, String) -> Unit,
-    onReset: () -> Unit,
+    onSave: (SupabaseSyncMode, String, String) -> Unit,
 ) {
-    var url by remember(config) { mutableStateOf(config.url) }
-    var publishableKey by remember(config) { mutableStateOf(config.publishableKey) }
+    var selectedMode by remember(config) { mutableStateOf(config.mode) }
+    var url by remember(config) { mutableStateOf(config.customUrl) }
+    var publishableKey by remember(config) { mutableStateOf(config.customPublishableKey) }
+    val canSave = when (selectedMode) {
+        SupabaseSyncMode.OFFICIAL -> config.officialAvailable
+        SupabaseSyncMode.LOCAL_ONLY -> true
+        SupabaseSyncMode.CUSTOM -> url.isNotBlank() && publishableKey.isNotBlank()
+    }
 
     AlertDialog(
         onDismissRequest = onDismiss,
         title = { Text("云同步设置") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Column(
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
                 Text(
-                    text = "不启用云同步也可以正常收藏文章。启用后，收藏数据会同步到 Supabase，电脑端 CLI 和 Skill 也能读取。",
+                    text = "普通用户使用官方云同步即可；也可以只保存在本机，或在高级模式接入自己的云存储。",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
-                TextField(
-                    value = url,
-                    onValueChange = { url = it },
-                    label = { Text("Supabase URL") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                SyncModeOption(
+                    selected = selectedMode == SupabaseSyncMode.OFFICIAL,
+                    enabled = config.officialAvailable,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudDone,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    title = "官方云同步",
+                    description = if (config.officialAvailable) {
+                        "登录后同步到码住官方云端，适合大多数用户。"
+                    } else {
+                        "当前构建未内置官方云同步配置。"
+                    },
+                    onClick = { selectedMode = SupabaseSyncMode.OFFICIAL },
                 )
-                TextField(
-                    value = publishableKey,
-                    onValueChange = { publishableKey = it },
-                    label = { Text("Publishable key") },
-                    singleLine = true,
-                    modifier = Modifier.fillMaxWidth(),
+                SyncModeOption(
+                    selected = selectedMode == SupabaseSyncMode.LOCAL_ONLY,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.CloudOff,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    title = "仅本机保存",
+                    description = "不上传到任何云端，收藏和解析结果只保存在这台手机。",
+                    onClick = { selectedMode = SupabaseSyncMode.LOCAL_ONLY },
                 )
+                SyncModeOption(
+                    selected = selectedMode == SupabaseSyncMode.CUSTOM,
+                    icon = {
+                        Icon(
+                            imageVector = Icons.Outlined.Settings,
+                            contentDescription = null,
+                            tint = MaterialTheme.colorScheme.primary,
+                        )
+                    },
+                    title = "自定义云存储",
+                    description = "高级用户可连接自己的云端数据库，需先按开发文档完成配置。",
+                    onClick = { selectedMode = SupabaseSyncMode.CUSTOM },
+                )
+                if (selectedMode == SupabaseSyncMode.CUSTOM) {
+                    TextField(
+                        value = url,
+                        onValueChange = { url = it },
+                        label = { Text("Supabase URL") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    TextField(
+                        value = publishableKey,
+                        onValueChange = { publishableKey = it },
+                        label = { Text("Publishable key") },
+                        singleLine = true,
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    Text(
+                        text = "保存后需要重新登录；URL 或 key 配错时，可回到这里修改。",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                onClick = { onSave(url, publishableKey) },
-                enabled = url.isNotBlank() && publishableKey.isNotBlank(),
+                onClick = { onSave(selectedMode, url, publishableKey) },
+                enabled = canSave,
             ) {
-                Text("保存并登录")
+                Text(
+                    when (selectedMode) {
+                        SupabaseSyncMode.LOCAL_ONLY -> "保存"
+                        else -> "保存并登录"
+                    },
+                )
             }
         },
         dismissButton = {
-            Row {
-                if (config.isConfigured) {
-                    TextButton(onClick = onReset) {
-                        Text("关闭云同步")
-                    }
-                }
-                TextButton(onClick = onDismiss) {
-                    Text("取消")
-                }
+            TextButton(onClick = onDismiss) {
+                Text("取消")
             }
         },
     )
 }
 
 @Composable
+private fun SyncModeOption(
+    selected: Boolean,
+    icon: @Composable () -> Unit,
+    title: String,
+    description: String,
+    onClick: () -> Unit,
+    enabled: Boolean = true,
+) {
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(
+                enabled = enabled,
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = onClick,
+            ),
+        colors = CardDefaults.cardColors(
+            containerColor = if (selected) {
+                MaterialTheme.colorScheme.primaryContainer
+            } else {
+                MaterialTheme.colorScheme.surface
+            },
+            contentColor = if (enabled) {
+                MaterialTheme.colorScheme.onSurface
+            } else {
+                MaterialTheme.colorScheme.onSurfaceVariant
+            },
+        ),
+        border = BorderStroke(
+            width = 1.dp,
+            color = if (selected) {
+                MaterialTheme.colorScheme.primary
+            } else {
+                MaterialTheme.colorScheme.outlineVariant
+            },
+        ),
+        shape = RoundedCornerShape(18.dp),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+    ) {
+        Row(
+            modifier = Modifier.padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            icon()
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(start = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(2.dp),
+            ) {
+                Text(
+                    text = title,
+                    fontWeight = FontWeight.SemiBold,
+                )
+                Text(
+                    text = description,
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+            if (selected) {
+                Icon(
+                    imageVector = Icons.Outlined.Check,
+                    contentDescription = "当前选中",
+                    tint = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier
+                        .padding(start = 8.dp)
+                        .size(24.dp),
+                )
+            }
+        }
+    }
+}
+
+@Composable
 internal fun AuthDialog(
     onDismiss: () -> Unit,
+    onOpenSyncSettings: () -> Unit,
     onSignIn: (String, String, (AuthResult) -> Unit) -> Unit,
     onSignUp: (String, String, (AuthResult) -> Unit) -> Unit,
 ) {
@@ -441,25 +631,37 @@ internal fun AuthDialog(
                         style = MaterialTheme.typography.bodySmall,
                     )
                 }
-                TextButton(
-                    onClick = {
-                        setMode(
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    TextButton(
+                        onClick = {
+                            setMode(
+                                if (isSignIn) {
+                                    AuthMode.SIGN_UP
+                                } else {
+                                    AuthMode.SIGN_IN
+                                },
+                            )
+                        },
+                        enabled = !loading,
+                    ) {
+                        Text(
                             if (isSignIn) {
-                                AuthMode.SIGN_UP
+                                "还没有账号？创建账号"
                             } else {
-                                AuthMode.SIGN_IN
+                                "已有账号？返回登录"
                             },
                         )
-                    },
-                    enabled = !loading,
-                ) {
-                    Text(
-                        if (isSignIn) {
-                            "还没有账号？创建账号"
-                        } else {
-                            "已有账号？返回登录"
-                        },
-                    )
+                    }
+                    TextButton(
+                        onClick = onOpenSyncSettings,
+                        enabled = !loading,
+                    ) {
+                        Text("云同步设置")
+                    }
                 }
             }
         },
@@ -498,6 +700,7 @@ internal fun AccountDialog(
     config: SupabaseConfig,
     onDismiss: () -> Unit,
     onSync: () -> Unit,
+    onCheckUpdate: () -> Unit,
     onSignOut: () -> Unit,
     onSettings: () -> Unit,
 ) {
@@ -521,7 +724,7 @@ internal fun AccountDialog(
                     )
                 }
                 Text(
-                    text = config.url,
+                    text = "当前模式：${config.displayName()}",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
@@ -530,8 +733,13 @@ internal fun AccountDialog(
             }
         },
         confirmButton = {
-            TextButton(onClick = onSync) {
-                Text("立即同步")
+            Row {
+                TextButton(onClick = onCheckUpdate) {
+                    Text("检查更新")
+                }
+                TextButton(onClick = onSync) {
+                    Text("立即同步")
+                }
             }
         },
         dismissButton = {

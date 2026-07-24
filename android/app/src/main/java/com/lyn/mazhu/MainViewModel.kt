@@ -11,6 +11,8 @@ import com.lyn.mazhu.data.RenameCollectionResult
 import com.lyn.mazhu.supabase.AuthResult
 import com.lyn.mazhu.supabase.SupabaseConfig
 import com.lyn.mazhu.supabase.SupabaseSession
+import com.lyn.mazhu.supabase.SupabaseSyncMode
+import com.lyn.mazhu.update.UpdateInfo
 import com.lyn.mazhu.worker.ParseWorkScheduler
 import com.lyn.mazhu.worker.SyncWorkScheduler
 import kotlinx.coroutines.flow.SharingStarted
@@ -23,6 +25,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     private val repository = (application as MazhuApplication).bookmarkRepository
     private val authRepository = app.authRepository
     private val supabaseConfigStore = app.supabaseConfigStore
+    private val updateRepository = app.updateRepository
 
     val session: StateFlow<SupabaseSession?> = authRepository.session
     val supabaseConfig: StateFlow<SupabaseConfig> = supabaseConfigStore.config
@@ -228,23 +231,34 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     fun saveSupabaseConfig(
+        mode: SupabaseSyncMode,
         url: String,
         publishableKey: String,
-        onComplete: () -> Unit,
+        onComplete: (Boolean) -> Unit,
     ) {
-        supabaseConfigStore.save(
-            SupabaseConfig(
-                url = url,
-                publishableKey = publishableKey,
-            ),
-        )
-        authRepository.signOut()
-        onComplete()
-    }
-
-    fun resetSupabaseConfig() {
-        supabaseConfigStore.reset()
-        authRepository.signOut()
+        viewModelScope.launch {
+            val oldConfig = supabaseConfigStore.current()
+            when (mode) {
+                SupabaseSyncMode.OFFICIAL -> supabaseConfigStore.useOfficial()
+                SupabaseSyncMode.LOCAL_ONLY -> supabaseConfigStore.useLocalOnly()
+                SupabaseSyncMode.CUSTOM -> supabaseConfigStore.saveCustom(
+                    url = url,
+                    publishableKey = publishableKey,
+                )
+            }
+            val newConfig = supabaseConfigStore.current()
+            val configChanged = oldConfig.mode != newConfig.mode ||
+                oldConfig.url != newConfig.url ||
+                oldConfig.publishableKey != newConfig.publishableKey
+            if (configChanged) {
+                authRepository.signOut()
+            }
+            if (newConfig.isConfigured && configChanged) {
+                repository.markLocalDataPendingSyncForCurrentCloud()
+                SyncWorkScheduler.enqueue(app)
+            }
+            onComplete(newConfig.isConfigured && (configChanged || authRepository.session.value == null))
+        }
     }
 
     fun syncNow(onStatus: (Boolean) -> Unit = {}) {
@@ -253,5 +267,18 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
             SyncWorkScheduler.enqueue(app)
             onStatus(hasPendingSync)
         }
+    }
+
+    fun checkForUpdates(
+        force: Boolean = false,
+        onResult: (UpdateInfo?) -> Unit,
+    ) {
+        viewModelScope.launch {
+            onResult(updateRepository.checkForAvailableUpdate(force = force))
+        }
+    }
+
+    fun deferUpdate(updateInfo: UpdateInfo) {
+        updateRepository.defer(updateInfo)
     }
 }

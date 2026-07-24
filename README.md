@@ -18,6 +18,7 @@
 ## Repository
 
 ```text
+site/                       GitHub Pages 静态落地页和更新清单
 android/                    Android 原生应用
 src/cli.ts                  mazhu CLI
 skills/mazhu-knowledge/     Codex Skill 源文件
@@ -32,7 +33,7 @@ scripts/install-codex-skill.sh
 
 普通用户只需要：
 
-1. 从 GitHub Releases 下载最新 APK。
+1. 打开项目主页：<https://lyn-zzz.github.io/mazhu/>。
 2. 在 Android 手机上安装码住。
 3. 在微信文章中选择分享给“码住”，或复制文章链接后打开码住。
 4. 选择收藏夹保存。
@@ -96,6 +97,7 @@ cd android
 - 暂不支持 iOS 和 Windows。
 - 暂不提供桌面 GUI。
 - APK 通过 GitHub Releases 分发，暂不上架应用商店。
+- 项目主页通过 GitHub Pages 托管，并提供二维码、APK 下载入口和更新清单。
 
 ## License
 

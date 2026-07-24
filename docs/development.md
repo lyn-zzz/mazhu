@@ -95,7 +95,8 @@ npm run cli -- summarize --all
 项目提供 `.github/workflows/release-apk.yml`：
 
 - 推送 `v*` tag 时构建签名 APK 并发布到 GitHub Release。
-- 手动触发 workflow 时只上传 workflow artifact。
+- 推送 `v*` tag 时同步构建 GitHub Pages 站点，生成 `latest.json` 和二维码。
+- 手动触发 workflow 时只上传 workflow artifact，不发布 GitHub Release 或 Pages。
 
 需要在 GitHub repository secrets 中配置：
 
@@ -124,9 +125,42 @@ base64 -i mazhu-release.jks | pbcopy
 
 务必备份 release keystore。丢失 keystore 后，用户无法用同一个包名正常覆盖升级已安装的 release APK。
 
+## GitHub Pages And Updates
+
+`site/` 是项目主页源码，采用纯静态 HTML/CSS：
+
+```text
+site/index.html             响应式落地页
+site/styles.css             页面样式
+site/latest.json            App 自动更新清单
+site/assets/download-qr.svg 下载页二维码
+```
+
+本地生成站点资源：
+
+```bash
+npm run build:site
+```
+
+生成脚本会读取 Android `versionName` / `versionCode`，从 `CHANGELOG.md` 提取当前版本更新说明，并生成：
+
+- `site/latest.json`：App 内自动更新检查使用。
+- `site/assets/download-qr.svg`：落地页桌面端展示的扫码入口。
+
+发布 `v*` tag 后，release workflow 会：
+
+1. 构建同签名 release APK。
+2. 发布 GitHub Release。
+3. 计算 APK `sha256`。
+4. 重建 `site/latest.json`。
+5. 部署 GitHub Pages。
+
+App 侧只做“检测新版本并打开落地页”，不会静默安装 APK。Android 侧载应用更新仍需要用户手动确认安装。
+
 ## Project Structure
 
 ```text
+site/                       GitHub Pages 落地页、二维码和更新清单
 android/                    Android 原生应用
 src/cli.ts                  mazhu CLI 入口和桌面知识库能力
 skills/mazhu-knowledge/     Codex Skill 源文件

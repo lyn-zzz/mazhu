@@ -8,6 +8,7 @@ import com.lyn.mazhu.supabase.SessionStore
 import com.lyn.mazhu.supabase.SupabaseConfigStore
 import com.lyn.mazhu.supabase.SupabaseDataClient
 import com.lyn.mazhu.supabase.SupabaseHttpClient
+import com.lyn.mazhu.update.UpdateRepository
 
 class MazhuApplication : Application() {
     val database by lazy { BookmarkDatabase.create(this) }
@@ -21,6 +22,9 @@ class MazhuApplication : Application() {
     }
     val supabaseDataClient by lazy {
         SupabaseDataClient(supabaseHttpClient)
+    }
+    val updateRepository by lazy {
+        UpdateRepository(this)
     }
     val bookmarkRepository by lazy {
         BookmarkRepository(

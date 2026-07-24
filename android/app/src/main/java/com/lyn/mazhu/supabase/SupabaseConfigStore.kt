@@ -10,26 +10,39 @@ class SupabaseConfigStore(context: Context) {
         PREFERENCES_NAME,
         Context.MODE_PRIVATE,
     )
-    private val fallbackConfig = SupabaseConfig(
-        url = BuildConfig.SUPABASE_URL,
-        publishableKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY,
-    )
+    private val officialUrl = BuildConfig.SUPABASE_URL.trim().trimEnd('/')
+    private val officialPublishableKey = BuildConfig.SUPABASE_PUBLISHABLE_KEY.trim()
+    private val officialAvailable = officialUrl.isNotBlank() &&
+        officialPublishableKey.isNotBlank()
     private val mutableConfig = MutableStateFlow(load())
 
     val config: StateFlow<SupabaseConfig> = mutableConfig
 
     fun current(): SupabaseConfig = mutableConfig.value
 
-    fun save(config: SupabaseConfig) {
+    fun useOfficial() {
         preferences.edit()
-            .putString(KEY_URL, config.url.trim().trimEnd('/'))
-            .putString(KEY_PUBLISHABLE_KEY, config.publishableKey.trim())
+            .putString(KEY_MODE, SupabaseSyncMode.OFFICIAL.name)
             .apply()
         mutableConfig.value = load()
     }
 
-    fun reset() {
-        preferences.edit().clear().apply()
+    fun useLocalOnly() {
+        preferences.edit()
+            .putString(KEY_MODE, SupabaseSyncMode.LOCAL_ONLY.name)
+            .apply()
+        mutableConfig.value = load()
+    }
+
+    fun saveCustom(
+        url: String,
+        publishableKey: String,
+    ) {
+        preferences.edit()
+            .putString(KEY_MODE, SupabaseSyncMode.CUSTOM.name)
+            .putString(KEY_URL, url.trim().trimEnd('/'))
+            .putString(KEY_PUBLISHABLE_KEY, publishableKey.trim())
+            .apply()
         mutableConfig.value = load()
     }
 
@@ -41,14 +54,53 @@ class SupabaseConfigStore(context: Context) {
         val savedKey = preferences.getString(KEY_PUBLISHABLE_KEY, null)
             ?.trim()
             .orEmpty()
-        if (savedUrl.isNotBlank() || savedKey.isNotBlank()) {
-            return SupabaseConfig(savedUrl, savedKey)
+        val mode = preferences.getString(KEY_MODE, null)
+            ?.let { value ->
+                runCatching { SupabaseSyncMode.valueOf(value) }.getOrNull()
+            }
+            ?: if (savedUrl.isNotBlank() || savedKey.isNotBlank()) {
+                SupabaseSyncMode.CUSTOM
+            } else if (officialAvailable) {
+                SupabaseSyncMode.OFFICIAL
+            } else {
+                SupabaseSyncMode.LOCAL_ONLY
+            }
+
+        return when (mode) {
+            SupabaseSyncMode.OFFICIAL -> SupabaseConfig(
+                mode = if (officialAvailable) {
+                    SupabaseSyncMode.OFFICIAL
+                } else {
+                    SupabaseSyncMode.LOCAL_ONLY
+                },
+                url = officialUrl,
+                publishableKey = officialPublishableKey,
+                customUrl = savedUrl,
+                customPublishableKey = savedKey,
+                officialAvailable = officialAvailable,
+            )
+            SupabaseSyncMode.LOCAL_ONLY -> SupabaseConfig(
+                mode = SupabaseSyncMode.LOCAL_ONLY,
+                url = "",
+                publishableKey = "",
+                customUrl = savedUrl,
+                customPublishableKey = savedKey,
+                officialAvailable = officialAvailable,
+            )
+            SupabaseSyncMode.CUSTOM -> SupabaseConfig(
+                mode = SupabaseSyncMode.CUSTOM,
+                url = savedUrl,
+                publishableKey = savedKey,
+                customUrl = savedUrl,
+                customPublishableKey = savedKey,
+                officialAvailable = officialAvailable,
+            )
         }
-        return fallbackConfig
     }
 
     private companion object {
         const val PREFERENCES_NAME = "supabase_config"
+        const val KEY_MODE = "mode"
         const val KEY_URL = "url"
         const val KEY_PUBLISHABLE_KEY = "publishable_key"
     }
